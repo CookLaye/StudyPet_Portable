@@ -1,0 +1,13 @@
+# Core dependencies for StudyPet
+pygame>=2.0.0
+pillow>=8.0.0
+plyer>=2.1.0
+
+# AI / LLM Stack (Local GPT Companion)
+langdetect>=1.0.9
+deep_translator>=1.11.4
+
+# Development and testing (optional)
+pytest>=6.0.0
+black>=21.0.0
+flake8>=3.8.0

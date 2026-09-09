@@ -1,0 +1,15 @@
+{
+  "sound_enabled": true,
+  "notifications_enabled": true,
+  "auto_save": true,
+  "pet_settings": {
+    "evolution_notifications": true,
+    "chat_auto_scroll": true
+  },
+  "study_settings": {
+    "break_reminders": true,
+    "study_session_length": 25,
+    "break_length": 5,
+    "daily_goal_hours": 2
+  }
+}

@@ -1,0 +1,257 @@
+{
+  "cat": {
+    "stages": {
+      "1": {
+        "name": "Cat Egg",
+        "affection_required": 200,
+        "image": "cat_egg.png"
+      },
+      "2": {
+        "name": "Cat Baby",
+        "affection_required": 200,
+        "image": "cat_baby.png"
+      },
+      "3": {
+        "name": "Cat Child",
+        "affection_required": 200,
+        "image": "cat_child.png"
+      },
+      "4": {
+        "name": "Cat Grown",
+        "affection_required": 200,
+        "image": "cat_grown.png"
+      },
+      "5": {
+        "name": "Cat Battle Fit",
+        "affection_required": 1000,
+        "image": "cat_battle_fit.png"
+      }
+    },
+    "emotions": {
+      "happy": {
+        "image": "cat_happy.png",
+        "description": "Happy"
+      },
+      "worried": {
+        "image": "cat_worried.png",
+        "description": "Worried"
+      },
+      "hungry": {
+        "image": "cat_hungry.png",
+        "description": "Hungry"
+      },
+      "sad": {
+        "image": "cat_sad.png",
+        "description": "Sad"
+      },
+      "angry": {
+        "image": "cat_angry.png",
+        "description": "Angry"
+      }
+    }
+  },
+  "dog": {
+    "stages": {
+      "1": {
+        "name": "Dog Egg",
+        "affection_required": 200,
+        "image": "dog_egg.png"
+      },
+      "2": {
+        "name": "Dog Baby",
+        "affection_required": 200,
+        "image": "dog_baby.png"
+      },
+      "3": {
+        "name": "Dog Child",
+        "affection_required": 200,
+        "image": "dog_child.png"
+      },
+      "4": {
+        "name": "Dog Grown",
+        "affection_required": 200,
+        "image": "dog_grown.png"
+      },
+      "5": {
+        "name": "Dog Battle Fit",
+        "affection_required": 1000,
+        "image": "dog_battle_fit.png"
+      }
+    },
+    "emotions": {
+      "happy": {
+        "image": "dog_happy.png",
+        "description": "Happy"
+      },
+      "worried": {
+        "image": "dog_worried.png",
+        "description": "Worried"
+      },
+      "hungry": {
+        "image": "dog_hungry.png",
+        "description": "Hungry"
+      },
+      "sad": {
+        "image": "dog_sad.png",
+        "description": "Sad"
+      },
+      "angry": {
+        "image": "dog_angry.png",
+        "description": "Angry"
+      }
+    }
+  },
+  "axolotl": {
+    "stages": {
+      "1": {
+        "name": "Axolotl Egg",
+        "affection_required": 200,
+        "image": "axolotl_egg.png"
+      },
+      "2": {
+        "name": "Axolotl Baby",
+        "affection_required": 200,
+        "image": "axolotl_baby.png"
+      },
+      "3": {
+        "name": "Axolotl Child",
+        "affection_required": 200,
+        "image": "axolotl_child.png"
+      },
+      "4": {
+        "name": "Axolotl Grown",
+        "affection_required": 200,
+        "image": "axolotl_grown.png"
+      },
+      "5": {
+        "name": "Axolotl Battle Fit",
+        "affection_required": 1000,
+        "image": "axolotl_battle_fit.png"
+      }
+    },
+    "emotions": {
+      "happy": {
+        "image": "axolotl_happy.png",
+        "description": "Happy"
+      },
+      "worried": {
+        "image": "axolotl_worried.png",
+        "description": "Worried"
+      },
+      "hungry": {
+        "image": "axolotl_hungry.png",
+        "description": "Hungry"
+      },
+      "sad": {
+        "image": "axolotl_sad.png",
+        "description": "Sad"
+      },
+      "angry": {
+        "image": "axolotl_angry.png",
+        "description": "Angry"
+      }
+    }
+  },
+  "raccoon": {
+    "stages": {
+      "1": {
+        "name": "Raccoon Egg",
+        "affection_required": 200,
+        "image": "raccoon_egg.png"
+      },
+      "2": {
+        "name": "Raccoon Baby",
+        "affection_required": 200,
+        "image": "raccoon_baby.png"
+      },
+      "3": {
+        "name": "Raccoon Child",
+        "affection_required": 200,
+        "image": "raccoon_child.png"
+      },
+      "4": {
+        "name": "Raccoon Grown",
+        "affection_required": 200,
+        "image": "raccoon_grown.png"
+      },
+      "5": {
+        "name": "Raccoon Battle Fit",
+        "affection_required": 1000,
+        "image": "raccoon_battle_fit.png"
+      }
+    },
+    "emotions": {
+      "happy": {
+        "image": "raccoon_happy.png",
+        "description": "Happy"
+      },
+      "worried": {
+        "image": "raccoon_worried.png",
+        "description": "Worried"
+      },
+      "hungry": {
+        "image": "raccoon_hungry.png",
+        "description": "Hungry"
+      },
+      "sad": {
+        "image": "raccoon_sad.png",
+        "description": "Sad"
+      },
+      "angry": {
+        "image": "raccoon_angry.png",
+        "description": "Angry"
+      }
+    }
+  },
+  "penguin": {
+    "stages": {
+      "1": {
+        "name": "Penguin Egg",
+        "affection_required": 200,
+        "image": "penguin_egg.png"
+      },
+      "2": {
+        "name": "Penguin Baby",
+        "affection_required": 200,
+        "image": "penguin_baby.png"
+      },
+      "3": {
+        "name": "Penguin Child",
+        "affection_required": 200,
+        "image": "penguin_child.png"
+      },
+      "4": {
+        "name": "Penguin Grown",
+        "affection_required": 200,
+        "image": "penguin_grown.png"
+      },
+      "5": {
+        "name": "Penguin Battle Fit",
+        "affection_required": 1000,
+        "image": "penguin_battle_fit.png"
+      }
+    },
+    "emotions": {
+      "happy": {
+        "image": "penguin_happy.png",
+        "description": "Happy"
+      },
+      "worried": {
+        "image": "penguin_worried.png",
+        "description": "Worried"
+      },
+      "hungry": {
+        "image": "penguin_hungry.png",
+        "description": "Hungry"
+      },
+      "sad": {
+        "image": "penguin_sad.png",
+        "description": "Sad"
+      },
+      "angry": {
+        "image": "penguin_angry.png",
+        "description": "Angry"
+      }
+    }
+  }
+}
