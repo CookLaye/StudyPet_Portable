@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # StudyPet - Zero-Setup Launcher (macOS)
-# Inspired by techjarves/Uncensored-Local-Studio
+# Using uv for standalone Python environment management
 
 # Set project root
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -26,8 +26,37 @@ fatal_error() {
     exit 1
 }
 
-# 1. Portable-First Check
-# Check common locations for a pre-compiled llama-server
+# 1. Ensure 'bin' directory exists
+mkdir -p bin
+
+# 2. Check for uv (Standalone Python Manager)
+if [ -f "bin/uv" ]; then
+    UV_BIN="bin/uv"
+else
+    echo -e "${YELLOW}[!] uv not found. Downloading standalone Python manager...${NC}"
+    # Detect architecture for uv binary
+    ARCH=$(uname -m)
+    if [ "$ARCH" == "arm64" ]; then
+        UV_URL="https://github.com/astral-sh/uv/releases/latest/download/uv-aarch64-apple-darwin.tar.gz"
+    else
+        UV_URL="https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-apple-darwin.tar.gz"
+    fi
+
+    curl -L "$UV_URL" -o bin/uv.tar.gz || fatal_error "Failed to download uv."
+    tar -xzf bin/uv.tar.gz -C bin/
+    rm bin/uv.tar.gz
+
+    # uv tarballs usually extract into a subdirectory. Find the binary and move it to bin/
+    find bin/ -name "uv" -type f -exec mv {} bin/uv \;
+    chmod +x bin/uv
+
+    if [ ! -f "bin/uv" ]; then
+        fatal_error "Could not find uv binary after extraction."
+    fi
+    UV_BIN="bin/uv"
+fi
+
+# 3. Portable-First Check for AI Backend
 if [[ -f "bin/llama-server" ]] || [[ -f "assets/models/gpt_pet/bin/llama-server" ]]; then
     echo -e "${GREEN}[V] Portable AI Backend found. Skipping installation...${NC}"
     goto_launch=true
@@ -36,10 +65,14 @@ else
 fi
 
 if [ "$goto_launch" = true ]; then
-    # Skip to launch
     echo -e "\n${GREEN}[V] Everything is ready. Starting StudyPet...${NC}"
     echo "------------------------------------------------------"
-    python3 src/StudyPet.py
+    # Use the venv python if it exists, otherwise use uv run
+    if [ -f ".venv/bin/python" ]; then
+        .venv/bin/python src/StudyPet.py
+    else
+        $UV_BIN run src/StudyPet.py
+    fi
     if [ $? -ne 0 ]; then
         echo -e "${RED}[X] Application crashed with code $?.${NC}"
     fi
@@ -48,40 +81,30 @@ if [ "$goto_launch" = true ]; then
     exit 0
 fi
 
-# 2. Check for Python 3
-if ! command -v python3 &> /dev/null; then
-    fatal_error "Python 3 not found. Please install it from python.org or via 'brew install python'."
-fi
-
-# 3. Setup Virtual Environment
+# 4. Setup Virtual Environment using uv
 if [ ! -d ".venv" ]; then
-    echo -e "${YELLOW}[!] No virtual environment found. Creating one...${NC}"
-    python3 -m venv .venv || fatal_error "Could not create virtual environment."
+    echo -e "${YELLOW}[!] Creating standalone Python environment...${NC}"
+    $UV_BIN venv || fatal_error "Could not create virtual environment."
 fi
 
-echo -e "${YELLOW}[!] Activating environment...${NC}"
-source .venv/bin/activate || fatal_error "Could not activate .venv."
-
-# 4. Install Dependencies
-echo -e "${YELLOW}[!] Checking for general dependencies...${NC}"
-pip install --upgrade pip || echo "Warning: Failed to upgrade pip"
-pip install --default-timeout=100 -r requirements.txt || fatal_error "Dependency installation failed."
+# 5. Install Dependencies using uv
+echo -e "${YELLOW}[!] Syncing dependencies...${NC}"
+$UV_BIN pip install -r requirements.txt || fatal_error "Dependency installation failed."
 
 echo -e "${YELLOW}[!] Installing AI Backend (llama-cpp-python) with Metal support...${NC}"
-# Use CMAKE_ARGS to enable Metal for Apple Silicon
-CMAKE_ARGS="-DLLAMA_METAL=on" pip install "llama-cpp-python[server]" --prefer-binary || fatal_error "AI Backend installation failed. Ensure you have Xcode Command Line Tools installed ('xcode-select --install')."
+CMAKE_ARGS="-DLLAMA_METAL=on" $UV_BIN pip install "llama-cpp-python[server]" --prefer-binary || fatal_error "AI Backend installation failed."
 
-# 5. AI Asset Setup
+# 6. AI Asset Setup
 echo -e "${YELLOW}[!] Preparing AI model assets...${NC}"
-python3 src/utils/setup_ai.py
+.venv/bin/python src/utils/setup_ai.py
 if [ $? -ne 0 ]; then
     echo -e "${YELLOW}[!] AI Setup had warnings, but attempting to launch...${NC}"
 fi
 
-# 6. Application Launch
+# 7. Application Launch
 echo -e "\n${GREEN}[V] Everything is ready. Starting StudyPet...${NC}"
 echo "------------------------------------------------------"
-python3 src/StudyPet.py
+.venv/bin/python src/StudyPet.py
 if [ $? -ne 0 ]; then
     echo -e "${RED}[X] Application crashed with code $?.${NC}"
 fi
