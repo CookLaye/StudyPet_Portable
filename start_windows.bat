@@ -50,7 +50,7 @@ if %ERRORLEVEL% neq 0 (
 )
 
 echo [!] Installing AI Backend (llama-cpp-python)...
-%UV_BIN% pip install llama-cpp-python[server] --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu --prefer-binary
+%UV_BIN% pip install llama-cpp-python[server] --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
 if %ERRORLEVEL% neq 0 (
     echo [X] FATAL ERROR: AI Backend installation failed.
     pause
