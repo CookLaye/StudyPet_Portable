@@ -91,12 +91,6 @@ fi
 echo -e "${YELLOW}[!] Syncing dependencies...${NC}"
 $UV_BIN pip install -r requirements.txt || fatal_error "Dependency installation failed."
 
-echo -e "${YELLOW}[!] Installing build tools (cmake)...${NC}"
-$UV_BIN pip install cmake || echo -e "${YELLOW}[!] Warning: CMake installation failed, attempting to proceed...${NC}"
-
-echo -e "${YELLOW}[!] Installing AI Backend (llama-cpp-python) with Metal support...${NC}"
-CMAKE_ARGS="-DLLAMA_METAL=on" $UV_BIN pip install "llama-cpp-python[server]" || fatal_error "AI Backend installation failed. Ensure Xcode Command Line Tools are installed ('xcode-select --install')."
-
 # 6. AI Asset Setup
 echo -e "${YELLOW}[!] Preparing AI model assets...${NC}"
 .venv/bin/python src/utils/setup_ai.py
