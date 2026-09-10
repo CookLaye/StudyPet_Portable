@@ -49,10 +49,15 @@ if %ERRORLEVEL% neq 0 (
     exit /b 1
 )
 
+echo [!] Installing build tools (cmake)...
+%UV_BIN% pip install cmake
+if %ERRORLEVEL% neq 0 echo [!] Warning: CMake installation failed, attempting to proceed...
+
 echo [!] Installing AI Backend (llama-cpp-python)...
 %UV_BIN% pip install llama-cpp-python[server] --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
 if %ERRORLEVEL% neq 0 (
     echo [X] FATAL ERROR: AI Backend installation failed.
+    echo Try installing Visual Studio C++ Build Tools if this persists.
     pause
     exit /b 1
 )
