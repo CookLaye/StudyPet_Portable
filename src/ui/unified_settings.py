@@ -364,9 +364,15 @@ class UnifiedSettings:
     
     def create_data_management_section(self, parent):
         """Create the data management section with proper restart functionality."""
+        try:
+            _scale = self.parent.winfo_fpixels('1i') / 96.0
+        except Exception:
+            _scale = 1.0
+
         data_panel = RoundedPanel(parent, radius=16, bg="#F2F2F2", padding=10)
         data_panel.set_padding(16)
-        data_panel.set_min_size(height=500)
+        # Scale the minimum height to match the display DPI
+        data_panel.set_min_size(height=round(500 * _scale))
         data_panel.pack(fill="x", pady=(0, 16))
         container = data_panel.inner
 

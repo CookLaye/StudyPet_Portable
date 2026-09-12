@@ -119,7 +119,8 @@ class SimplePlayground:
         self._setup_background()
         
         # Pet state
-        self.pet_size = 800  # Increased size for better visibility
+        # Size is now proportional to the canvas size to ensure consistent appearance across resolutions
+        self.pet_size = min(self.width, self.height) // 4
         self.pet_x = self.width // 2
         # Lower the rest position (moved down by 100 pixels)
         self.pet_y = (self.height // 2) + 100
