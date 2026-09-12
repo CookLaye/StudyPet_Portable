@@ -21,26 +21,31 @@ StudyPet utilizes a high-performance, lightweight AI architecture optimized for 
 - **Bilingual Engine**: A "Hub-and-Spoke" translation wrapper that processes inputs in English for maximum model coherence and translates responses back to the user's language with a custom pronoun-polishing layer for Vietnamese.
 
 ### Core Tech
-- **Language**: Python 3.x
+- **Language**: Python 3.x (Managed by `uv` for zero-setup)
 - **GUI**: Tkinter
 - **Audio**: Pygame
 - **Computer Vision**: OpenCV & Keras (for drowsiness detection)
 
-## 🚀 Getting Started (Self-Contained Setup)
+## 🚀 Getting Started (Zero-Setup)
 
-StudyPet comes with a fully automated environment system to get you running in minutes.
+StudyPet now uses a standalone environment manager (`uv`) to ensure it runs on any device without requiring you to manually install Python or configure system paths.
 
-### Installation
-1.  **Clone the repository** and navigate to the root folder.
-2.  **Run `StudyPet.bat`**.
-    *   This script automatically creates a local Python virtual environment (`.venv`).
-    *   It installs only the necessary lightweight dependencies.
-    *   It detects your hardware (CPU/GPU) and downloads the matching `llama-server` binary and the Llama 3.2 1B model.
-    *   Finally, it launches the application.
+### 🪟 Windows Setup
+1. **Clone the repository** or download the portable folder.
+2. **Run `start_windows.bat`**.
+   - The script will automatically download `uv` (a fast Python manager).
+   - It creates a standalone Python virtual environment in the `.venv` folder.
+   - It installs all dependencies and the `llama-cpp-python` build tools.
+   - It downloads the `llama-server` binary and the AI model.
+   - Finally, it launches the application.
 
-### Testing the AI
-If you want to test the pet's conversational capabilities without launching the full game:
-- Run **`TestChatbot.bat`**. This will start the local AI server and open an interactive terminal chat.
+### 🍎 macOS Setup
+1. **Clone the repository** or download the portable folder.
+2. **Run `start_mac.sh`** (you may need to run `chmod +x start_mac.sh` first).
+   - The script detects your Mac's architecture (Intel or Apple Silicon).
+   - It downloads `uv` and sets up a standalone Python environment.
+   - It downloads the pre-compiled `llama-server` binary specifically for your Mac.
+   - It downloads the AI model and launches the application.
 
 ## 📁 Project Structure
 - `src/`: Main source code.
