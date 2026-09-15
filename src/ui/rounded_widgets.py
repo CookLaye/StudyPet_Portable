@@ -125,7 +125,7 @@ class RoundedButton(tk.Frame):
 
 class RoundedPanel(tk.Frame):
     def __init__(self, parent, radius=20, bg="#FAFAFA", padding=8, fit_content=True):
-        super().__init__(parent, bg=parent.cget("bg"))
+        super().__init__(parent, bg=parent.cget("bg"), bd=0, highlightthickness=0)
         self.radius = radius
         # Ensure padding is at least equal to radius to prevent content from
         # overlapping the rounded corners of the background.
@@ -138,6 +138,7 @@ class RoundedPanel(tk.Frame):
         self.canvas = tk.Canvas(self, highlightthickness=0, bd=0, bg=self.cget("bg"))
         self.canvas.pack(fill="both", expand=True)
         self.inner = tk.Frame(self.canvas, bg=self.bg_color, highlightthickness=0, bd=0)
+        self.inner.pack_propagate(False)
         self._win_id = self.canvas.create_window((0, 0), window=self.inner, anchor="nw")
         self._bg_id = None
         self.bind("<Configure>", self._on_frame_configure)
@@ -150,13 +151,13 @@ class RoundedPanel(tk.Frame):
         self.padding = padding
         self._schedule_draw()
 
-    def _schedule_draw(self):
+    def _schedule_draw(self, event=None):
         if not self._draw_scheduled:
             self._draw_scheduled = True
-            self.after_idle(self.draw)
+            self.after_idle(lambda: self.draw(event))
 
     def _on_frame_configure(self, event=None):
-        self._schedule_draw()
+        self._schedule_draw(event)
 
     def _on_inner_configure(self, event=None):
         self._schedule_draw()
@@ -186,14 +187,24 @@ class RoundedPanel(tk.Frame):
         ]
         return self.canvas.create_polygon(points, smooth=True, **kwargs)
 
-    def draw(self):
+    def draw(self, event=None):
         self._draw_scheduled = False
+        self.update_idletasks()
+
+        # Use event dimensions if available, otherwise use winfo
+        if event:
+            frame_w = event.width
+            frame_h = event.height
+        else:
+            frame_w = self.winfo_width()
+            frame_h = self.winfo_height()
+
         # Measure content including requested size, border, and internal padding
         req_w = self.inner.winfo_reqwidth()
         req_h = self.inner.winfo_reqheight()
         # Available size based on outer widget
-        avail_w = max(1, self.winfo_width() - self.padding * 2)
-        avail_h = max(1, self.winfo_height() - self.padding * 2)
+        avail_w = max(1, frame_w - self.padding * 2)
+        avail_h = max(1, frame_h - self.padding * 2)
 
         if self.fit_content:
             # Expand to fit content if it's larger than available space
@@ -202,22 +213,38 @@ class RoundedPanel(tk.Frame):
         else:
             # Constrain to available space to allow internal scrolling
             # If we're not yet mapped, avail_w/h will be 1. Use req_w/h as fallback.
-            width = avail_w if avail_w > 1 else req_w
-            height = avail_h if avail_h > 1 else req_h
+            if self.winfo_ismapped():
+                width = avail_w
+                height = avail_h
+            else:
+                width = req_w
+                height = req_h
 
         # Apply minimum size hints (give priority when larger than content)
         if self._min_width is not None:
             width = max(width, self._min_width)
         if self._min_height is not None:
             height = max(height, self._min_height)
-        total_w = max(width + self.padding * 2, 20)
-        total_h = max(height + self.padding * 2, 20)
 
-        # Update canvas size to accommodate content
+        # Final total dimensions
+        total_w = width + self.padding * 2
+        total_h = height + self.padding * 2
+
+        # Hard cap to actual frame dimensions for constrained panels
+        if not self.fit_content:
+            total_w = min(total_w, max(1, frame_w))
+            total_h = min(total_h, max(1, frame_h))
+
+        total_w = max(total_w, 20)
+        total_h = max(total_h, 20)
+
+        # Update canvas size and final dimensions
         try:
             self.canvas.config(width=total_w, height=total_h)
         except Exception:
             pass
+
+
 
         r = min(self.radius, total_w // 2, total_h // 2)
         if self._bg_id is not None:
@@ -225,11 +252,12 @@ class RoundedPanel(tk.Frame):
                 self.canvas.delete(self._bg_id)
             except Exception:
                 pass
-        self._bg_id = self.draw_round_rect(1, 1, total_w - 1, total_h - 1, r, fill=self.bg_color, outline="")
+        self._bg_id = self.draw_round_rect(2, 2, total_w - 2, total_h - 2, r, fill=self.bg_color, outline="")
 
         # Position inner frame and ensure it has the measured width/height
         self.canvas.coords(self._win_id, self.padding, self.padding)
         try:
+            self.inner.config(width=width, height=height)
             self.canvas.itemconfigure(self._win_id, width=width, height=height)
             # Crucially, if we are not fitting content, we want the canvas NOT to scroll
             # so that the internal widget handles it.

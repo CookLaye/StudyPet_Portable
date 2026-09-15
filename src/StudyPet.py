@@ -689,6 +689,7 @@ class VirtualPetStudyApp:
         Saves pet state only when closing from main game screen to prevent
         unnecessary saves from other screens. Cleans up all resources.
         """
+        print("[REPRO] VirtualPetStudyApp._on_close called")
         try:
             # Save pet state if on main game screen
             self._save_pet_state_on_close()
@@ -707,6 +708,7 @@ class VirtualPetStudyApp:
 
     def _save_pet_state_on_close(self) -> None:
         """Save pet state and application data on close."""
+        print("[REPRO] VirtualPetStudyApp._save_pet_state_on_close called")
         if hasattr(self, 'current_screen') and self.current_screen is not None:
             try:
                 from src.screens.main_game_screen import MainGameScreen
@@ -731,11 +733,7 @@ class VirtualPetStudyApp:
         except Exception as e:
             print(f"Warning: Could not save application state on close: {e}")
 
-        try:
-            if hasattr(self, 'app_state') and hasattr(self.app_state, 'clear_runtime_backup'):
-                self.app_state.clear_runtime_backup()
-        except Exception as e:
-            print(f"Warning: Could not clear runtime backup on close: {e}")
+        # Runtime backup cleanup is handled in _on_close via app_state.end_session()
 
     def _cleanup_resources(self) -> None:
         """Cleanup application resources."""

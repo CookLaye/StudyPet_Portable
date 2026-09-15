@@ -252,35 +252,35 @@ class SessionManager:
     
     def complete_block(self) -> bool:
         """
-        Complete the current block and start countdown for next block.
-        
+        Complete the current block and handle transition to the next state.
+
         Returns:
-            bool: True if block completed successfully, False if session ended
+            bool: True if block completed successfully and session continues, False if session ended
         """
         session = self.app_state.study_session
-        
+
         # Cancel current block timer
         self._cancel_after(self._block_after_id)
         self._block_after_id = None
-        
+
         # Check if session is complete
         if session['current_block'] >= len(session['schedule']['blocks']):
             self._complete_session()
             return False
-        
+
         # Get block info
         block = session['schedule']['blocks'][session['current_block']]
         duration_sec = int(time.time() - session.get('block_start_time', time.time()))
-        
+
         # Update study time for study blocks
         if block['type'] == 'study':
             study_time_added = max(0, duration_sec)
             self.user_data['study_time'] = int(self.user_data.get('study_time', 0)) + study_time_added
             session['total_study_time'] = int(session.get('total_study_time', 0)) + study_time_added
-            
+
             # Also update app_state stats for real-time tracking
             self.app_state.update_user_stats(study_time_added, 0)
-        
+
         # Record completed block
         session['completed_blocks'].append({
             'type': block['type'],
@@ -288,11 +288,23 @@ class SessionManager:
             'actual_duration_sec': duration_sec,
             'completed_at': datetime.now().isoformat()
         })
-        
+
         # Move to next block
         session['current_block'] += 1
-        
-        # Start countdown for next block
+
+        # Determine transition based on the block that just finished
+        if block['type'] == 'study':
+            # If next block is break, start it immediately
+            if session['current_block'] < len(session['schedule']['blocks']) and \
+               session['schedule']['blocks'][session['current_block']]['type'] == 'break':
+                self._start_block()
+                return True
+        elif block['type'] == 'break':
+            # Break ends -> Back to selection state immediately
+            self._complete_session()
+            return False
+
+        # Default: start countdown for next block (e.g. study -> study)
         self._start_countdown()
         return True
     

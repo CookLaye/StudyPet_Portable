@@ -4,6 +4,7 @@ from datetime import datetime, date, timedelta
 from ui.rounded_widgets import RoundedPanel
 from ui.simple_theme import simple_theme, create_rounded_button
 from ui.date_picker import DatePicker
+from utils.notifications import NotificationManager
 
 class TasksPanel(RoundedPanel):
     """
@@ -32,46 +33,27 @@ class TasksPanel(RoundedPanel):
 
         self._build_ui()
         self.after(100, self._render_timeline)
+        self.after(100, self._render_daily)
+        self.after(100, self._render_planned_list)
 
     def _build_ui(self):
-        # --- Main Scrollable Container ---
-        # We wrap everything in a canvas to make the whole panel scrollable
-        self.main_canvas = tk.Canvas(self.inner, bg=self.colors["bg_main"], highlightthickness=0)
-        self.main_vsb = tk.Scrollbar(self.inner, orient="vertical", command=self.main_canvas.yview)
-        self.scrollable_content = tk.Frame(self.main_canvas, bg=self.colors["bg_main"])
-
-        self.scrollable_content.bind(
-            "<Configure>",
-            lambda e: self.main_canvas.configure(scrollregion=self.main_canvas.bbox("all"))
-        )
-
-        self._main_win_id = self.main_canvas.create_window((0, 0), window=self.scrollable_content, anchor="nw")
-        self.main_canvas.configure(yscrollcommand=self.main_vsb.set)
-
-        # Handle canvas resizing to keep content width relative
-        def on_canvas_resize(event):
-            # Expand content to match canvas width
-            self.main_canvas.itemconfig(self._main_win_id, width=event.width)
-            # Set timeline height to ~3/5 of the available window height
-            timeline_h = int(event.height * 0.6)
-            self.cv_frame.configure(height=timeline_h)
-            self.timeline_canvas.configure(height=timeline_h)
-            self._render_timeline()
-
-        self.main_canvas.bind("<Configure>", on_canvas_resize)
-
-        self.main_vsb.pack(side="right", fill="y")
-        self.main_canvas.pack(side="left", fill="both", expand=True)
+        # --- Main Layout Container ---
+        self.main_container = tk.Frame(self.inner, bg=self.colors["bg_main"])
+        self.main_container.pack(fill="both", expand=True)
+        self.main_container.grid_columnconfigure(0, weight=1)
+        self.main_container.grid_rowconfigure(2, weight=6, minsize=300) # Calendar gets more space
+        self.main_container.grid_rowconfigure(3, weight=2, minsize=100) # Daily habits
+        self.main_container.grid_rowconfigure(4, weight=2, minsize=100) # Planned tasks
 
         # --- Top Navigation Bar ---
-        top = tk.Frame(self.scrollable_content, bg=self.colors["bg_main"])
-        top.pack(fill="x", pady=(0, 10))
+        top = tk.Frame(self.main_container, bg=self.colors["bg_main"])
+        top.grid(row=0, column=0, sticky="ew", pady=(0, 10))
 
         nav = tk.Frame(top, bg=self.colors["bg_main"])
         nav.pack(side="left")
 
         create_rounded_button(nav, "←", command=self._prev_period, style="accent", radius=10, padding=(8, 4), font=("Arial", 10)).pack(side="left", padx=2)
-        create_rounded_button(nav, "Today", command=self._go_today, style="accent", radius=10, padding=(8, 4), font=("Arial", 10)).pack(side="left", padx=5)
+        create_rounded_button(nav, "Go to Today", command=self._go_today, style="accent", radius=10, padding=(8, 4), font=("Arial", 10)).pack(side="left", padx=5)
         create_rounded_button(nav, "→", command=self._next_period, style="accent", radius=10, padding=(8, 4), font=("Arial", 10)).pack(side="left", padx=2)
 
         self.range_lbl = tk.Label(top, text="", font=("Arial", 11, "bold"), bg=self.colors["bg_main"], fg=self.colors["text_dark"])
@@ -83,8 +65,8 @@ class TasksPanel(RoundedPanel):
         create_rounded_button(right, "+ Add Task", command=self._toggle_add_panel, style="accent", radius=10, padding=(12, 6), font=("Arial", 11, "bold")).pack(side="right")
 
         # --- Add Task Panel (initially hidden) ---
-        self.add_panel = tk.Frame(self.scrollable_content, bg=self.colors["bg_secondary"])
-        # We'll handle visibility in _toggle_add_panel
+        self.add_panel = tk.Frame(self.main_container, bg=self.colors["bg_secondary"])
+        # Positioned in row 1, visibility handled by _toggle_add_panel
 
         add_row = tk.Frame(self.add_panel, bg=self.colors["bg_secondary"])
         add_row.pack(fill="x", padx=10, pady=10)
@@ -116,51 +98,70 @@ class TasksPanel(RoundedPanel):
         create_rounded_button(add_row, "Add", command=self._add_task, style="accent", radius=10, padding=(10, 4), font=("Arial", 10, "bold")).pack(side="left", padx=2)
         create_rounded_button(add_row, "✕", command=self._toggle_add_panel, style="accent", radius=10, padding=(10, 4), font=("Arial", 10)).pack(side="left", padx=2)
 
-        # --- Timeline View (Canvas) ---
-        self.cv_frame = tk.Frame(self.scrollable_content, bg=self.colors["bg_main"])
-        self.cv_frame.pack(fill="x", padx=10, pady=10)
+        # --- Section 1: Calendar (Scrollable) ---
+        timeline_container = tk.Frame(self.main_container, bg=self.colors["bg_main"])
+        timeline_container.grid(row=2, column=0, sticky="nsew", padx=10, pady=10)
 
-        self.timeline_canvas = tk.Canvas(self.cv_frame, bg="#FFFFFF", highlightthickness=1, highlightbackground="#E5E7EB")
-        vsb = tk.Scrollbar(self.cv_frame, orient="vertical", command=self.timeline_canvas.yview)
-        self.timeline_canvas.configure(yscrollcommand=vsb.set)
-        vsb.pack(side="right", fill="y")
-        self.timeline_canvas.pack(fill="both", expand=True)
+        tk.Label(timeline_container, text="📅 Calendar", font=("Arial", 11, "bold"), bg=self.colors["bg_main"], fg=self.colors["text_dark"]).pack(anchor="w", pady=(0, 5))
+
+        self.timeline_canvas = tk.Canvas(timeline_container, bg="#FFFFFF", highlightthickness=1, highlightbackground="#E5E7EB")
+        self.timeline_vsb = tk.Scrollbar(timeline_container, orient="vertical", command=self.timeline_canvas.yview)
+        self.timeline_canvas.configure(yscrollcommand=self.timeline_vsb.set)
+
+        self.timeline_canvas.pack(side="left", fill="both", expand=True)
+        self.timeline_vsb.pack(side="right", fill="y")
 
         self.timeline_canvas.bind("<Configure>", lambda e: self._render_timeline())
         self.timeline_canvas.bind("<Button-1>", self._on_timeline_click)
         self.timeline_canvas.bind("<Button-3>", self._on_timeline_right_click)
 
-        # --- Daily Tasks Section ---
-        self._daily_header = tk.Frame(self.scrollable_content, bg=self.colors["bg_secondary"], height=30)
-        self._daily_header.pack(fill="x", padx=10, pady=(10, 0))
-        self._daily_header.pack_propagate(False)
+        # --- Section 2: Daily Tasks (Scrollable) ---
+        daily_container = tk.Frame(self.main_container, bg=self.colors["bg_main"])
+        daily_container.grid(row=3, column=0, sticky="nsew", padx=10, pady=(0, 10))
 
-        self._daily_toggle_btn = create_rounded_button(
-            self._daily_header, "▾ Daily Tasks", command=self._toggle_daily_panel,
-            style="accent", radius=5, padding=(8, 2), font=("Arial", 10, "bold")
+        tk.Label(daily_container, text="✅ Daily Habits", font=("Arial", 11, "bold"), bg=self.colors["bg_main"], fg=self.colors["text_dark"]).pack(anchor="w", pady=(0, 5))
+
+        self.daily_canvas = tk.Canvas(daily_container, bg=self.colors["bg_secondary"], highlightthickness=0)
+        self.daily_vsb = tk.Scrollbar(daily_container, orient="vertical", command=self.daily_canvas.yview)
+        self.daily_canvas.configure(yscrollcommand=self.daily_vsb.set)
+
+        self.daily_scroll_frame = tk.Frame(self.daily_canvas, bg=self.colors["bg_secondary"])
+        self.daily_scroll_frame.bind(
+            "<Configure>",
+            lambda e: self.daily_canvas.configure(scrollregion=self.daily_canvas.bbox("all"))
         )
-        self._daily_toggle_btn.pack(side="left", fill="y", padx=5)
+        self.daily_canvas.create_window((0, 0), window=self.daily_scroll_frame, anchor="nw")
 
-        self._daily_panel = tk.Frame(self.scrollable_content, bg=self.colors["bg_secondary"])
-        # Handled in _toggle_daily_panel
+        self.daily_canvas.pack(side="left", fill="both", expand=True)
+        self.daily_vsb.pack(side="right", fill="y")
+
+        # --- Section 3: Planned Tasks (Scrollable List) ---
+        planned_container = tk.Frame(self.main_container, bg=self.colors["bg_main"])
+        planned_container.grid(row=4, column=0, sticky="nsew", padx=10, pady=(0, 10))
+
+        tk.Label(planned_container, text="📅 Planned", font=("Arial", 11, "bold"), bg=self.colors["bg_main"], fg=self.colors["text_dark"]).pack(anchor="w", pady=(0, 5))
+
+        self.planned_canvas = tk.Canvas(planned_container, bg=self.colors["bg_secondary"], highlightthickness=0)
+        self.planned_vsb = tk.Scrollbar(planned_container, orient="vertical", command=self.planned_canvas.yview)
+        self.planned_canvas.configure(yscrollcommand=self.planned_vsb.set)
+
+        self.planned_scroll_frame = tk.Frame(self.planned_canvas, bg=self.colors["bg_secondary"])
+        self.planned_scroll_frame.bind(
+            "<Configure>",
+            lambda e: self.planned_canvas.configure(scrollregion=self.planned_canvas.bbox("all"))
+        )
+        self.planned_canvas.create_window((0, 0), window=self.planned_scroll_frame, anchor="nw")
+
+        self.planned_canvas.pack(side="left", fill="both", expand=True)
+        self.planned_vsb.pack(side="right", fill="y")
 
     def _toggle_add_panel(self):
         self._add_vis = not self._add_vis
         if self._add_vis:
-            self.add_panel.pack(fill="x", pady=(0, 10))
+            self.add_panel.grid(row=1, column=0, sticky="ew", pady=(0, 10))
         else:
-            self.add_panel.pack_forget()
+            self.add_panel.grid_forget()
             self.f_due.delete(0, "end")
-
-    def _toggle_daily_panel(self):
-        self._daily_vis = not self._daily_vis
-        if self._daily_vis:
-            self._render_daily()
-            self._daily_panel.pack(fill="x", padx=10, pady=(0, 10))
-            self._daily_toggle_btn.configure(text="▾ Daily Tasks")
-        else:
-            self._daily_panel.pack_forget()
-            self._daily_toggle_btn.configure(text="▸ Daily Tasks")
 
     def _prev_period(self):
         self.view_start -= timedelta(days=self.view_days)
@@ -175,57 +176,106 @@ class TasksPanel(RoundedPanel):
         self._render_timeline()
 
     def _add_task(self):
-        title = self.f_title.get().strip()
-        start_s = self.f_start.get().strip()
-        due_s = self.f_due.get().strip()
-
-        if not title or title == "Task title...":
-            messagebox.showwarning("Missing title", "Please enter a task title.")
-            return
-
+        print("[REPRO] TasksPanel._add_task called")
         try:
-            start_date = datetime.strptime(start_s, "%Y-%m-%d").date()
-        except ValueError:
-            messagebox.showerror("Invalid date", "Use YYYY-MM-DD for start date.")
-            return
+            title = self.f_title.get().strip()
+            start_s = self.f_start.get().strip()
+            due_s = self.f_due.get().strip()
 
-        # If due date is blank, it's a daily task
-        if not due_s:
-            new_task = {
-                "title": title,
-                "priority": self.f_prio.get(),
-                "done": False,
-                "daily": True,
-                "last_reset": str(date.today()),
-                "pomo_count": 0
-            }
-        else:
+            if not title or title == "Task title...":
+                print("[REPRO] _add_task: Missing or default title")
+                messagebox.showwarning("Missing title", "Please enter a task title.")
+                return
+
+            notification_msg = ""
+            # If due date is blank, it's a daily task
+            if not due_s:
+                new_task = {
+                    "title": title,
+                    "priority": self.f_prio.get(),
+                    "done": False,
+                    "daily": True,
+                    "last_reset": str(date.today()),
+                    "pomo_count": 0
+                }
+                notification_msg = f'"{title}" added to Daily Habits (no due date provided).'
+            else:
+                try:
+                    due_date = datetime.strptime(due_s, "%Y-%m-%d").date()
+                except ValueError:
+                    print(f"[REPRO] _add_task: Invalid due date format: {due_s}")
+                    messagebox.showerror("Invalid date", "Use YYYY-MM-DD for due date.")
+                    return
+
+                if not start_s:
+                    print("[REPRO] _add_task: Missing start date")
+                    messagebox.showerror("Invalid date", "Please enter a start date for timed tasks.")
+                    return
+
+                try:
+                    start_date = datetime.strptime(start_s, "%Y-%m-%d").date()
+                except ValueError:
+                    print(f"[REPRO] _add_task: Invalid start date format: {start_s}")
+                    messagebox.showerror("Invalid date", "Use YYYY-MM-DD for start date.")
+                    return
+
+                if due_date < start_date:
+                    print("[REPRO] _add_task: Due date before start date")
+                    messagebox.showerror("Invalid dates", "Due date cannot be before start date.")
+                    return
+
+                new_task = {
+                    "title": title,
+                    "start": str(start_date),
+                    "due": str(due_date),
+                    "priority": self.f_prio.get(),
+                    "done": False,
+                    "pomo_count": 0
+                }
+                notification_msg = f'"{title}" added to Planned Tasks.'
+
+            print(f"[REPRO] _add_task: Appending task: {title}")
+            self.app_state.tasks.append(new_task)
+            print(f"[REPRO] _add_task: Current tasks count: {len(self.app_state.tasks)}")
+
+            if self.app_state.save_tasks():
+                print("[REPRO] _add_task: save_tasks succeeded")
+                NotificationManager.notify("Task Added", notification_msg)
+            else:
+                print("[REPRO] _add_task: save_tasks failed")
+
+            # --- RENDER FIRST (to ensure it happens even if cleanup fails) ---
             try:
-                due_date = datetime.strptime(due_s, "%Y-%m-%d").date()
-            except ValueError:
-                messagebox.showerror("Invalid date", "Use YYYY-MM-DD for due date.")
-                return
+                print("[REPRO] _add_task: Rendering views...")
+                self._render_timeline()
+                self._render_daily()
+                self._render_planned_list()
+                print("[REPRO] _add_task: Rendering complete")
+            except Exception as render_e:
+                print(f"[REPRO] _add_task: Rendering error: {render_e}")
+                import traceback
+                traceback.print_exc()
 
-            if due_date < start_date:
-                messagebox.showerror("Invalid dates", "Due date cannot be before start date.")
-                return
+            # Sync with Study Timer panel if available
+            if self.main_game_screen and hasattr(self.main_game_screen, 'update_task_selector_list'):
+                self.main_game_screen.update_task_selector_list()
 
-            new_task = {
-                "title": title,
-                "start": str(start_date),
-                "due": str(due_date),
-                "priority": self.f_prio.get(),
-                "done": False,
-                "pomo_count": 0
-            }
+            # --- CLEANUP LAST ---
+            try:
+                print("[REPRO] _add_task: Starting UI cleanup...")
+                self.f_title.delete(0, "end")
+                self.f_due.delete(0, "end")
+                self._toggle_add_panel()
+                print("[REPRO] _add_task: UI cleanup complete")
+            except Exception as cleanup_e:
+                print(f"[REPRO] _add_task: UI cleanup error: {cleanup_e}")
+                import traceback
+                traceback.print_exc()
 
-        self.app_state.tasks.append(new_task)
-        self.app_state.save_data()
-        self.f_title.delete(0, "end")
-        self.f_due.delete(0, "end")
-        self._toggle_add_panel()
-        self._render_timeline()
-        self._render_daily()
+        except Exception as e:
+            print(f"[REPRO] _add_task: FATAL EXCEPTION: {e}")
+            import traceback
+            traceback.print_exc()
 
     def _render_timeline(self):
         self.timeline_canvas.delete("all")
@@ -354,8 +404,10 @@ class TasksPanel(RoundedPanel):
             if x0 <= cx <= x1 and y0 <= cy <= y1:
                 if messagebox.askyesno("Delete task", f'Delete "{self.app_state.tasks[idx]["title"]}"?'):
                     self.app_state.tasks.pop(idx)
-                    self.app_state.save_data()
+                    if self.app_state.save_data():
+                        NotificationManager.notify("Task Deleted", "Task removed successfully.")
                     self._render_timeline()
+                    self._render_planned_list()
                 break
 
     def _open_task_dialog(self, idx):
@@ -363,7 +415,7 @@ class TasksPanel(RoundedPanel):
         is_daily = task.get("daily", False)
         dlg = tk.Toplevel(self)
         dlg.title("Edit Task")
-        dlg.geometry("400x300")
+        dlg.place(relwidth=0.4, relheight=0.3)
         dlg.resizable(False, False)
         dlg.grab_set()
 
@@ -392,23 +444,38 @@ class TasksPanel(RoundedPanel):
             if not new_title: return
             task["title"] = new_title
             task["priority"] = prio_var.get()
-            self.app_state.save_data()
+            if self.app_state.save_tasks():
+                NotificationManager.notify("Task Updated", "Changes saved successfully.")
             self._render_timeline()
             self._render_daily()
+            self._render_planned_list()
             dlg.destroy()
 
         def toggle_done():
             task["done"] = not task["done"]
-            self.app_state.save_data()
+            if self.app_state.save_tasks():
+                NotificationManager.notify("Task Updated", "Status updated successfully.")
             self._render_timeline()
             self._render_daily()
+            self._render_planned_list()
             dlg.destroy()
+
+        def delete_task():
+            if messagebox.askyesno("Delete Task", f'Delete "{task["title"]}"?'):
+                self.app_state.tasks.pop(idx)
+                if self.app_state.save_tasks():
+                    NotificationManager.notify("Task Deleted", "Task removed successfully.")
+                self._render_timeline()
+                self._render_daily()
+                self._render_planned_list()
+                dlg.destroy()
 
         btn_row = tk.Frame(frame)
         btn_row.pack(pady=20)
         create_rounded_button(btn_row, "Save", command=apply, style="accent", radius=5).pack(side="left", padx=5)
         create_rounded_button(btn_row, "Mark Done", command=toggle_done, style="accent", radius=5).pack(side="left", padx=5)
         create_rounded_button(btn_row, "Focus", command=lambda: self._focus_task(idx, dlg), style="accent", radius=5).pack(side="left", padx=5)
+        create_rounded_button(btn_row, "Delete", command=delete_task, style="accent", radius=5).pack(side="left", padx=5)
         create_rounded_button(btn_row, "Close", command=dlg.destroy, style="accent", radius=5).pack(side="left", padx=5)
 
     def _focus_task(self, idx, dlg):
@@ -420,44 +487,106 @@ class TasksPanel(RoundedPanel):
         dlg.destroy()
 
     def _render_daily(self):
-        for w in self._daily_panel.winfo_children():
+        for w in self.daily_scroll_frame.winfo_children():
             w.destroy()
 
         today = str(date.today())
         daily_tasks = [(i, t) for i, t in enumerate(self.app_state.tasks) if t.get("daily")]
 
         if not daily_tasks:
-            tk.Label(self._daily_panel, text="No daily tasks yet.", bg=self.colors["bg_secondary"], fg=self.colors["text_dark"]).pack(pady=10)
-            return
+            tk.Label(self.daily_scroll_frame, text="No daily tasks yet.", bg=self.colors["bg_secondary"], fg=self.colors["text_dark"]).pack(pady=10)
+        else:
+            for idx, task in daily_tasks:
+                if task.get("last_reset") != today:
+                    task["done"] = False
+                    task["last_reset"] = today
+                    self.app_state.save_data()
 
-        for idx, task in daily_tasks:
-            if task.get("last_reset") != today:
-                task["done"] = False
-                task["last_reset"] = today
-                self.app_state.save_data()
+                row = tk.Frame(self.daily_scroll_frame, bg=self.colors["bg_secondary"])
+                row.pack(fill="x", padx=5, pady=2)
 
-            row = tk.Frame(self._daily_panel, bg=self.colors["bg_secondary"])
-            row.pack(fill="x", padx=5, pady=2)
+                var = tk.BooleanVar(value=task["done"])
+                chk = tk.Checkbutton(row, variable=var, bg=self.colors["bg_secondary"],
+                                     command=lambda i=idx, v=var: self._toggle_daily(i, v))
+                chk.pack(side="left")
 
-            var = tk.BooleanVar(value=task["done"])
-            chk = tk.Checkbutton(row, variable=var, bg=self.colors["bg_secondary"],
-                                 command=lambda i=idx, v=var: self._toggle_daily(i, v))
-            chk.pack(side="left")
+                tk.Label(row, text=task["title"], bg=self.colors["bg_secondary"],
+                         fg=self.colors["text_dark"], font=("Arial", 10)).pack(side="left", padx=5)
 
-            tk.Label(row, text=task["title"], bg=self.colors["bg_secondary"],
-                     fg=self.colors["text_dark"], font=("Arial", 10)).pack(side="left", padx=5)
+                create_rounded_button(row, "✕", command=lambda i=idx: self._delete_task(i),
+                                      style="accent", radius=5, padding=(4, 2)).pack(side="right")
 
-            create_rounded_button(row, "✕", command=lambda i=idx: self._delete_task(i),
-                                  style="accent", radius=5, padding=(4, 2)).pack(side="right")
+        # Explicitly update scrollregion after adding widgets
+        self.daily_canvas.update_idletasks()
+        self.daily_canvas.configure(scrollregion=self.daily_canvas.bbox("all"))
+
+    def _render_planned_list(self):
+        """Renders a scrollable list of non-daily tasks sorted by due date."""
+        for w in self.planned_scroll_frame.winfo_children():
+            w.destroy()
+
+        # Filter and sort non-daily tasks that have a due date
+        planned_tasks = []
+        for i, t in enumerate(self.app_state.tasks):
+            if not t.get("daily") and t.get("due"):
+                planned_tasks.append((i, t))
+
+        # Sort by due date ascending
+        planned_tasks.sort(key=lambda x: x[1].get("due", "9999-12-31"))
+
+        if not planned_tasks:
+            tk.Label(self.planned_scroll_frame, text="No planned tasks.", bg=self.colors["bg_secondary"], fg=self.colors["text_dark"]).pack(pady=10)
+        else:
+            for idx, task in planned_tasks:
+                row = tk.Frame(self.planned_scroll_frame, bg=self.colors["bg_secondary"])
+                row.pack(fill="x", padx=5, pady=2)
+
+                var = tk.BooleanVar(value=task["done"])
+                chk = tk.Checkbutton(row, variable=var, bg=self.colors["bg_secondary"],
+                                     command=lambda i=idx, v=var: self._toggle_planned(i, v))
+                chk.pack(side="left")
+
+                tk.Label(row, text=task["title"], bg=self.colors["bg_secondary"],
+                         fg=self.colors["text_dark"], font=("Arial", 10), width=20, anchor="w").pack(side="left", padx=5)
+
+                tk.Label(row, text=task["due"], bg=self.colors["bg_secondary"],
+                         fg=self.colors["text_medium"], font=("Arial", 9), width=12).pack(side="left", padx=5)
+
+                tk.Label(row, text=task["priority"], bg=self.colors["bg_secondary"],
+                         fg=self.colors["text_dark"], font=("Arial", 9), width=8).pack(side="left", padx=5)
+
+                create_rounded_button(row, "✕", command=lambda i=idx: self._delete_planned(i),
+                                      style="accent", radius=5, padding=(4, 2)).pack(side="right")
+
+        self.planned_canvas.update_idletasks()
+        self.planned_canvas.configure(scrollregion=self.planned_canvas.bbox("all"))
+
+    def _toggle_planned(self, idx, var):
+        self.app_state.tasks[idx]["done"] = var.get()
+        if self.app_state.save_tasks():
+            NotificationManager.notify("Task Updated", "Status updated successfully.")
+        self._render_planned_list()
+        self._render_timeline()
+
+    def _delete_planned(self, idx):
+        if messagebox.askyesno("Delete Task", f"Delete '{self.app_state.tasks[idx]['title']}'?"):
+            self.app_state.tasks.pop(idx)
+            if self.app_state.save_tasks():
+                NotificationManager.notify("Task Deleted", "Task removed successfully.")
+            self._render_planned_list()
+            self._render_timeline()
 
     def _toggle_daily(self, idx, var):
         self.app_state.tasks[idx]["done"] = var.get()
-        self.app_state.save_data()
+        if self.app_state.save_tasks():
+            NotificationManager.notify("Habit Updated", "Status updated successfully.")
         self._render_daily()
 
     def _delete_task(self, idx):
         if messagebox.askyesno("Delete Task", f"Delete '{self.app_state.tasks[idx]['title']}'?"):
             self.app_state.tasks.pop(idx)
-            self.app_state.save_data()
+            if self.app_state.save_tasks():
+                NotificationManager.notify("Habit Deleted", "Habit removed successfully.")
             self._render_daily()
             self._render_timeline()
+            self._render_planned_list()

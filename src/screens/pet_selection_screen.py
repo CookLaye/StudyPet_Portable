@@ -7,7 +7,7 @@ from tkinter import ttk
 from utils.notifications import NotificationManager
 from src.models.pet import PetType
 from graphics.pet_graphics import pet_graphics
-from ui.simple_theme import simple_theme, create_styled_button, create_rounded_button
+from ui.simple_theme import simple_theme, THEME, create_styled_button, create_rounded_button
 from ui.rounded_widgets import RoundedPanel
 
 class PetSelectionScreen:
@@ -113,7 +113,7 @@ class PetSelectionScreen:
         ).pack(pady=(2, 0))
 
         # Pets container (horizontally fitting)
-        pets_panel = RoundedPanel(self.frame, radius=12, bg=self.colors["bg_panel"], padding=8)
+        pets_panel = RoundedPanel(self.frame, radius=THEME.RADIUS_SMALL, bg=self.colors["bg_panel"], padding=THEME.PADDING_SMALL)
         pets_panel.set_padding(10)
         pets_panel.grid(row=1, column=0, sticky="nsew", padx=self.s(8), pady=self.s(6))
         pets_container = pets_panel.inner
@@ -189,7 +189,7 @@ class PetSelectionScreen:
             name_label.bind("<Button-1>", lambda e, pt=pet_type: self.select_pet(pt))
 
         # Preview container
-        preview_panel = RoundedPanel(self.frame, radius=12, bg=self.colors["pastel_mint"], padding=10)
+        preview_panel = RoundedPanel(self.frame, radius=THEME.RADIUS_SMALL, bg=self.colors["pastel_mint"], padding=THEME.PADDING_SMALL)
         preview_panel.set_padding(14)
         preview_panel.set_min_size(height=self.s(280))
         preview_panel.grid(row=2, column=0, sticky="ew", padx=8, pady=(4, 6))

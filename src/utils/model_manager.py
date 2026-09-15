@@ -40,13 +40,25 @@ class ModelManager:
             return "cpu"
 
     def _download_file(self, url, dest):
-        """Helper to download files."""
+        """Helper to download files with a simple progress indicator."""
         print(f"Downloading: {url} ...")
         try:
-            urllib.request.urlretrieve(url, dest)
-            print(f"Downloaded to {dest}")
+            with urllib.request.urlopen(url) as response:
+                total_size = int(response.getheader('Content-Length', 0))
+                downloaded = 0
+                with open(dest, 'wb') as f:
+                    while True:
+                        chunk = response.read(8192)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if total_size > 0:
+                            percent = int(100 * downloaded / total_size)
+                            print(f"\rProgress: {percent}% ({downloaded // 1024} KB / {total_size // 1024} KB)", end="", flush=True)
+                print(f"\nDownloaded to {dest}")
         except Exception as e:
-            print(f"Download failed: {e}")
+            print(f"\nDownload failed: {e}")
             raise
 
     def setup_model(self):
@@ -63,19 +75,30 @@ class ModelManager:
     def setup_backend(self):
         """Downloads and extracts the standalone llama-server binary."""
         if self.server_exe.exists():
-            print("llama-server.exe already exists.")
+            print(f"{self.server_exe.name} already exists.")
             return self.server_exe
 
+        system = platform.system()
         hw = self.detect_hardware()
-        print(f"Detecting hardware: {hw}")
+        print(f"System: {system}, Hardware: {hw}")
 
-        # Updated to current release b9975 filenames from official releases
+        # Use current stable release tag
         release_tag = "b9975"
-        if hw == "cuda":
-            # Using CUDA 12.4 as the most compatible current target
-            zip_url = f"https://github.com/ggml-org/llama.cpp/releases/download/{release_tag}/llama-{release_tag}-bin-win-cuda-12.4-x64.zip"
+
+        if system == "Windows":
+            if hw == "cuda":
+                zip_url = f"https://github.com/ggml-org/llama.cpp/releases/download/{release_tag}/llama-{release_tag}-bin-win-cuda-12.4-x64.zip"
+            else:
+                zip_url = f"https://github.com/ggml-org/llama.cpp/releases/download/{release_tag}/llama-{release_tag}-bin-win-cpu-x64.zip"
+        elif system == "Darwin": # macOS
+            # Detect architecture for Mac
+            arch = platform.machine()
+            if arch == "arm64":
+                zip_url = f"https://github.com/ggml-org/llama.cpp/releases/download/{release_tag}/llama-{release_tag}-bin-macos-arm64.zip"
+            else:
+                zip_url = f"https://github.com/ggml-org/llama.cpp/releases/download/{release_tag}/llama-{release_tag}-bin-macos-x86_64.zip"
         else:
-            zip_url = f"https://github.com/ggml-org/llama.cpp/releases/download/{release_tag}/llama-{release_tag}-bin-win-cpu-x64.zip"
+            raise NotImplementedError(f"OS {system} is not supported for automatic binary setup.")
 
         zip_path = self.bin_dir / "backend.zip"
 
@@ -86,22 +109,24 @@ class ModelManager:
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                 zip_ref.extractall(self.bin_dir)
 
-            # Search for the server executable in the extracted files
-            for file in self.bin_dir.glob("**/*.exe"):
+            # Search for the server binary (handle .exe for Windows, no ext for Unix)
+            ext = ".exe" if system == "Windows" else ""
+            for file in self.bin_dir.glob(f"**/*llama-server{ext}"):
                 if "llama-server" in file.name.lower():
-                    # Move it to the root of bin folder for consistency
                     target_path = self.server_exe
                     if file != target_path:
-                        # If a file with the same name exists, remove it first
                         if target_path.exists():
                             target_path.unlink()
                         file.rename(target_path)
                     break
 
-            if not self.server_exe.exists():
-                raise FileNotFoundError("Could not find llama-server.exe in the downloaded zip.")
+            # Set permissions for Unix systems
+            if system != "Windows" and self.server_exe.exists():
+                self.server_exe.chmod(0o755)
 
-            # Cleanup zip
+            if not self.server_exe.exists():
+                raise FileNotFoundError(f"Could not find {self.server_exe.name} in the downloaded zip.")
+
             zip_path.unlink()
             print("Backend binaries setup successfully.")
 
@@ -139,7 +164,7 @@ class ModelManager:
             "-m", str(self.model_path),
             "-c", "2048",
             "--port", str(self.port),
-            "-ngl", "32" if hw == "cuda" else "0",
+            "-ngl", "32" if (hw == "cuda" or platform.system() == "Darwin") else "0",
             "-t", "8",
             "--flash-attn", "on"
         ]
@@ -159,7 +184,7 @@ class ModelManager:
                 creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
             )
 
-            print("Waiting for server to initialize", end="", flush=True)
+            print("Waiting for AI server to initialize", end="", flush=True)
             timeout = 60
             start_time = time.time()
 

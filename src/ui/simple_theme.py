@@ -18,7 +18,14 @@ else:
 
 class SimpleTheme:
     """Centralized black and white color management system."""
-    
+
+    # Theme constants
+    RADIUS_LARGE = 60
+    RADIUS_MED = 16
+    RADIUS_SMALL = 12
+    PADDING_MED = 16
+    PADDING_SMALL = 8
+
     def __init__(self):
         # Simple black and white color palette
         self.colors = {
@@ -254,6 +261,7 @@ class SimpleTheme:
 
 # Global theme instance
 simple_theme = SimpleTheme()
+THEME = simple_theme
 
 # Helper functions for easy access
 def get_color(color_name):

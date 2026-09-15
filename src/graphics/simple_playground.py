@@ -4,6 +4,7 @@ Simple Playground Renderer - A minimal implementation to display and move a pet
 
 import os
 import time
+import random
 import tkinter as tk
 from tkinter import Canvas
 from PIL import Image, ImageTk, ImageDraw, ImageFont
@@ -75,6 +76,12 @@ class SimplePlayground:
         self.app_state = app_state
         self._bindings = []  # Track event bindings for cleanup
 
+        # Minigame state
+        self.minigame_active = False
+        self.circles = []
+        self.circles_eaten = 0
+        self.game_screen = None
+
         # Clean up any existing instance on this canvas
         if hasattr(canvas, '_playground_instance'):
             canvas._playground_instance.cleanup()
@@ -120,7 +127,7 @@ class SimplePlayground:
         
         # Pet state
         # Size is now proportional to the canvas size to ensure consistent appearance across resolutions
-        self.pet_size = min(self.width, self.height) // 4
+        self.pet_size = min(self.width, self.height) // 2
         self.pet_x = self.width // 2
         # Lower the rest position (moved down by 100 pixels)
         self.pet_y = (self.height // 2) + 100
@@ -180,6 +187,68 @@ class SimplePlayground:
         self.pet_y = self.target_y
         self.is_moving = False
         self._update_pet_position()
+
+    def start_minigame(self, game_screen):
+        """Start the minigame: spawn circles and activate game state"""
+        logger.info("Starting minigame")
+        self.minigame_active = True
+        self.game_screen = game_screen
+        self.circles_eaten = 0
+        self.circles = []
+
+        # Clear any existing circles just in case
+        self.canvas.delete("minigame_circle")
+
+        # Spawn initial circle (only one at a time)
+        self._spawn_circle()
+
+    def stop_minigame(self):
+        """Stop the minigame and clean up circles"""
+        logger.info("Stopping minigame")
+        self.minigame_active = False
+        self.canvas.delete("minigame_circle")
+        self.circles = []
+        self.game_screen = None
+
+    def _spawn_circle(self):
+        """Spawn a random colored circle within the central playground area"""
+        # Define boundaries to avoid UI areas (Top nav and bottom taskbar)
+        # Spawn in the middle 40% of the screen height
+        min_y = int(self.height * 0.3)
+        max_y = int(self.height * 0.7)
+
+        # Spawn in the central 60% of the screen width to avoid borders
+        min_x = int(self.width * 0.2)
+        max_x = int(self.width * 0.8)
+
+        x = random.randint(min_x, max_x)
+        y = random.randint(min_y, max_y)
+
+        # Random pastel color
+        colors = ['#FFB7B2', '#FFDAC1', '#E2F0CB', '#B5EAD7', '#C7CEEA', '#FADADD']
+        color = random.choice(colors)
+
+        # Radius is 4% of width
+        radius = int(self.width * 0.04)
+
+        # Create the circle on the canvas
+        circle_id = self.canvas.create_oval(
+            x - radius, y - radius,
+            x + radius, y + radius,
+            fill=color, outline='white', width=2,
+            tags=("minigame_circle",)
+        )
+
+        # Store circle data for collision and lifespan
+        self.circles.append({
+            'id': circle_id,
+            'x': x,
+            'y': y,
+            'vx': 0,
+            'vy': 0,
+            'radius': radius,
+            'spawn_time': time.time()
+        })
     
     def update_pet_state(self, pet_type=None, pet_stage=None, pet_emotion=None):
         """Update the pet's state and refresh the display"""
@@ -694,21 +763,49 @@ class SimplePlayground:
         self._update_pet_position()
     
     def _on_click(self, event):
-        """Handle mouse click to move pet"""
-        # Don't move if in egg stage
-        if getattr(self, 'pet_stage', 4) == 1:  # Stage 1 is egg
+        """Handle mouse click to move pet and interact with minigame"""
+        # 1. Handle Minigame Interaction First
+        if getattr(self, 'minigame_active', False):
+            for circle in self.circles[:]:
+                dist = ((event.x - circle['x'])**2 + (event.y - circle['y'])**2)**0.5
+                if dist < circle['radius']:
+                    # Check pet stage for collection method
+                    pet_stage = getattr(self, 'pet_stage', 4)
+
+                    if pet_stage == 1: # Egg Stage: User collects immediately
+                        self.canvas.delete(circle['id'])
+                        self.circles.remove(circle)
+                        self.circles_eaten += 1
+                        self._spawn_circle()
+                        # Visual feedback: we can still move the pet to the click
+                        # although the user is "collecting"
+                    else: # Hatched Stage: Pet must reach the circle
+                        # Move pet to the circle's location to "collect" it
+                        self.target_x = circle['x']
+                        self.target_y = circle['y']
+                        self.is_moving = True
+                        # We don't delete the circle here; _animate handles collision
+
+                    # Once a circle is handled, stop checking others
+                    break
+
+        # 2. Handle Pet Movement (Only if not an egg)
+        if getattr(self, 'pet_stage', 4) != 1:
+            # If we didn't just set the target via a circle click, use the click coords
+            if not getattr(self, 'minigame_active', False) or \
+               not any(((event.x - c['x'])**2 + (event.y - c['y'])**2)**0.5 < c['radius'] for c in self.circles):
+                self.target_x = event.x
+                self.target_y = event.y
+                self.is_moving = True
+
+            # Update pet direction based on movement target
+            dx = self.target_x - self.pet_x
+            if abs(dx) > 1:
+                self._flip_pet_image(dx < 0)
+        else:
+            # Egg stays at rest or moves slightly? User said "collecting... would be the user"
+            # We'll keep the egg stationary or returning to rest.
             self._return_to_rest_position()
-            return
-            
-        # Update target position
-        self.target_x = event.x
-        self.target_y = event.y
-        self.is_moving = True
-        
-        # Update pet direction based on click position
-        dx = self.target_x - self.pet_x
-        if abs(dx) > 1:  # Only update direction if moving significantly horizontally
-            self._flip_pet_image(dx < 0)
     
     def _move_pet(self, dx, dy):
         """Move the pet by the specified delta"""
@@ -845,36 +942,63 @@ class SimplePlayground:
             if not self._canvas_exists():
                 self.animation_id = None
                 return
-                
+
+            # Handle minigame circle lifespan and collisions
+            if self.minigame_active:
+                now = time.time()
+                # Use a while loop or similar to avoid the "multiple spawn" bug
+                # when modifying the list we're iterating over
+                i = 0
+                while i < len(self.circles):
+                    circle = self.circles[i]
+                    # Whac-a-mole behavior: circle disappears after 3 seconds if not clicked
+                    if now - circle.get('spawn_time', 0) > 3.0:
+                        self.canvas.delete(circle['id'])
+                        self.circles.pop(i)
+                        self._spawn_circle()
+                        # Since we just spawned a new one and removed one,
+                        # we can either break or continue. To avoid infinite
+                        # spawn loops in one frame, we'll just continue.
+                        continue
+
+                    # Pet-collision as a fallback for hatched pets
+                    dist = ((self.pet_x - circle['x'])**2 + (self.pet_y - circle['y'])**2)**0.5
+                    if dist < circle['radius']:
+                        self.canvas.delete(circle['id'])
+                        self.circles.pop(i)
+                        self.circles_eaten += 1
+                        self._spawn_circle()
+                        # Break to avoid modifying list and then continuing with
+                        # the same index on a new element in a way that might
+                        # trigger double-spawns
+                        break
+                    i += 1
+
             # Handle movement towards target
             if self.is_moving:
                 dx = self.target_x - self.pet_x
                 dy = self.target_y - self.pet_y
                 distance = (dx**2 + dy**2) ** 0.5
-                
+
                 if distance > 2:  # If not at target
-                    # Calculate movement with easing and slower speed
-                    move_speed = 0.12  # Slightly slower for more natural movement
+                    move_speed = 0.12
                     self.pet_x += dx * move_speed
                     self.pet_y += dy * move_speed
-                    
-                    # Keep pet within bounds with padding
+
                     padding = self.pet_size // 2
                     self.pet_x = max(padding, min(self.width - padding, self.pet_x))
                     self.pet_y = max(padding, min(self.height - padding, self.pet_y))
-                    
-                    # Update pet position with bounce effect
+
                     self._update_pet_position()
                 else:
                     self.is_moving = False
-            
+
             # Schedule next frame
             if self.canvas.winfo_exists():
                 self.animation_timer = self.canvas.after(self.update_interval, self._animate)
-                
+
         except Exception as e:
             logger.error(f"Error in animation loop: {e}")
-            # Try to restart animation after a delay
             if self.canvas.winfo_exists():
                 self.animation_timer = self.canvas.after(1000, self._start_animation)
     

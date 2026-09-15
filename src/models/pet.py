@@ -132,11 +132,12 @@ class Pet:
     
     @affection.setter
     def affection(self, value: int):
+        old_value = self._affection
         self._affection = max(0, min(value, self.affection_cap))
         self._update_emotion()
-        
-        # Check for evolution when affection increases
-        if value > 0:
+
+        # Check for evolution only when affection actually changes and is positive
+        if self._affection > 0 and self._affection != old_value:
             self._check_evolution()
         
     def _load_pet_data(self) -> Dict:
@@ -251,7 +252,8 @@ class Pet:
         if current_stage_value >= max_stage:
             # Final stage (Battle-fit) cap at 1000 instead of 500
             cap = self.stage_targets.get(current_stage_value, 1000)
-            self.affection = min(self.affection, cap)
+            if self.affection > cap:
+                self.affection = cap
 
         return evolved
     

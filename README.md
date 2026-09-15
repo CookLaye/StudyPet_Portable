@@ -1,13 +1,15 @@
 # 🐾 StudyPet
 
-StudyPet is an AI-powered virtual pet study companion designed to turn academic productivity into a gamified experience. By linking focus sessions and study goals to the growth and happiness of a virtual pet, StudyPet provides emotional support and motivation to students.
+StudyPet is an AI-powered emotional companion designed to help students find balance and relaxation amidst academic pressure. Rather than just a productivity tool, StudyPet serves as a digital sanctuary—a supportive virtual pet that grows with you, listens to your stresses, and provides a calming presence during the most demanding times of student life.
 
 ## ✨ Key Features
 
-- **Bilingual AI Companion**: A local, private, and supportive virtual pet. It uses a specialized translation wrapper to support multiple languages (including English and Vietnamese) while maintaining a consistent, cute persona.
-- **Drowsiness Detection**: Real-time monitoring using computer vision to alert you when you're falling asleep, keeping your study sessions effective.
-- **Evolution System**: Watch your pet grow from an Egg $\rightarrow$ Baby $\rightarrow$ Child $\rightarrow$ Grown based on your productivity.
-- **Emotion Engine**: The pet reacts with different emotions (Happy, Sad, Angry, Worried, Hungry) based on your interactions and study habits.
+- **Emotional Support Companion**: A local, private virtual pet that offers a listening ear and a cute persona. It supports multiple languages (including English and Vietnamese), providing a safe space for students to express themselves.
+- **Stress-Relief Rant**: A dedicated space to let it all out. Users can rant about their stressors, and the pet will visually "consume" the stress, transforming negative energy into support. Based on the detected stress level, the pet provides tailored advice to help the user relax and recharge.
+- **Vietnamese Student Specialist**: The AI is specifically attuned to the unique pressures faced by high school students in Vietnam, offering empathetic guidance on navigating final examinations and the high-stakes process of university selection.
+- **Well-being Monitoring**: Real-time drowsiness detection using computer vision ensures you're taking necessary breaks, reminding you that rest is just as important as study.
+- **Holistic Evolution System**: Watch your pet evolve from an Egg $\rightarrow$ Baby $\rightarrow$ Child $\rightarrow$ Grown, not just through productivity, but through the bond and emotional balance you maintain.
+- **Emotion Engine**: A reactive pet that mirrors and responds to your emotional state, providing companionship when you feel worried or sad.
 - **Zero-Internet AI**: Once set up, the chatbot runs entirely on your local machine—no API keys or internet connection required.
 - **Crash Recovery System**: Built-in session tracking and runtime backups ensure your pet's progress is preserved even if the application closes unexpectedly.
 

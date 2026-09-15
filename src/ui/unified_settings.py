@@ -8,7 +8,7 @@ from tkinter import simpledialog
 from utils.notifications import NotificationManager
 import sys
 import os
-from ui.simple_theme import simple_theme, create_rounded_button
+from ui.simple_theme import simple_theme, create_rounded_button, THEME
 from ui.rounded_widgets import RoundedPanel
 
 
@@ -40,7 +40,14 @@ class UnifiedSettings:
 
         self.settings_window = tk.Toplevel(self.parent)
         self.settings_window.title(self.title)
-        self.settings_window.geometry(f"{s(450)}x{s(650)}")
+
+        # Calculate size relative to parent for consistent look
+        parent_w = self.parent.winfo_width() if self.parent.winfo_width() > 1 else 1280
+        parent_h = self.parent.winfo_height() if self.parent.winfo_height() > 1 else 720
+        win_w = max(s(400), int(parent_w * 0.4))
+        win_h = max(s(600), int(parent_h * 0.8))
+        self.settings_window.geometry(f"{win_w}x{win_h}")
+
         self.settings_window.minsize(s(400), s(600))
         self.settings_window.resizable(True, True)
         self.settings_window.configure(bg=self.colors["bg_main"])
@@ -139,7 +146,7 @@ class UnifiedSettings:
         settings_frame.pack(fill="both", expand=True)
         
         # Title with decorative styling in rounded block
-        title_panel = RoundedPanel(settings_frame, radius=16, bg=self.colors["bg_secondary"], padding=8)
+        title_panel = RoundedPanel(settings_frame, radius=THEME.RADIUS_MED, bg=self.colors["bg_secondary"], padding=THEME.PADDING_SMALL)
         title_panel.set_padding(10)
         title_panel.pack(fill="x", pady=(0, 16))
         title_frame = tk.Frame(title_panel.inner, bg=self.colors["bg_secondary"], relief="flat", bd=0)
@@ -175,7 +182,7 @@ class UnifiedSettings:
     
     def create_app_info_section(self, parent):
         """Create the app information section."""
-        info_panel = RoundedPanel(parent, radius=16, bg="#F2F2F2", padding=8)
+        info_panel = RoundedPanel(parent, radius=THEME.RADIUS_MED, bg="#F2F2F2", padding=THEME.PADDING_SMALL)
         info_panel.set_padding(10)
         info_panel.pack(fill="x", pady=(0, 12))
         container = info_panel.inner
@@ -205,7 +212,7 @@ class UnifiedSettings:
     
     def create_available_settings_section(self, parent):
         """Create the available settings section."""
-        settings_panel = RoundedPanel(parent, radius=16, bg="#F2F2F2", padding=8)
+        settings_panel = RoundedPanel(parent, radius=THEME.RADIUS_MED, bg="#F2F2F2", padding=THEME.PADDING_SMALL)
         settings_panel.set_padding(10)
         settings_panel.pack(fill="x", pady=(0, 12))
         container = settings_panel.inner
@@ -242,7 +249,7 @@ class UnifiedSettings:
     
     def create_developer_mode_section(self, parent):
         """Create the developer mode section."""
-        self.dev_section = RoundedPanel(parent, radius=16, bg="#F2F2F2", padding=10)
+        self.dev_section = RoundedPanel(parent, radius=THEME.RADIUS_MED, bg="#F2F2F2", padding=THEME.PADDING_SMALL)
         self.dev_section.set_padding(16)
         self.dev_section.set_min_size(height=300)
         self.dev_section.pack(fill="x", pady=(0, 16))
@@ -369,10 +376,10 @@ class UnifiedSettings:
         except Exception:
             _scale = 1.0
 
-        data_panel = RoundedPanel(parent, radius=16, bg="#F2F2F2", padding=10)
+        data_panel = RoundedPanel(parent, radius=THEME.RADIUS_MED, bg="#F2F2F2", padding=THEME.PADDING_SMALL)
         data_panel.set_padding(16)
         # Scale the minimum height to match the display DPI
-        data_panel.set_min_size(height=round(500 * _scale))
+        data_panel.set_min_size(height=round(250 * _scale))
         data_panel.pack(fill="x", pady=(0, 16))
         container = data_panel.inner
 

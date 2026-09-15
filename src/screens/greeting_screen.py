@@ -5,7 +5,7 @@ Greeting Screen - The startup screen of the Virtual Pet Study App
 import tkinter as tk
 from tkinter import ttk
 from utils.notifications import NotificationManager
-from ui.simple_theme import simple_theme, create_styled_button, create_rounded_button
+from ui.simple_theme import simple_theme, THEME, create_styled_button, create_rounded_button
 from ui.rounded_widgets import RoundedPanel
 
 from ui.pet_theme import apply_pet_theme
@@ -127,7 +127,7 @@ class GreetingScreen:
         self.frame.grid_columnconfigure(0, weight=1)
         
         # Title section with beautiful rounded background
-        title_panel = RoundedPanel(self.frame, radius=60, bg=self.colors["bg_secondary"], padding=16)
+        title_panel = RoundedPanel(self.frame, radius=THEME.RADIUS_LARGE, bg=self.colors["bg_secondary"], padding=THEME.PADDING_MED)
         title_panel.grid(row=0, column=0, sticky="nsew", padx=20, pady=(20, 10))
         
         title_frame = tk.Frame(title_panel.inner, bg=self.colors["bg_secondary"])

@@ -134,7 +134,7 @@ class SchedulerScreen:
         """Show a quick mental health check-in dialog."""
         checkin_window = tk.Toplevel(self.parent)
         checkin_window.title("💭 Mental Health Check-in")
-        checkin_window.geometry("500x400")
+        checkin_window.place(relwidth=0.5, relheight=0.4)
         checkin_window.resizable(True, True)
         
         # Main frame
@@ -214,7 +214,7 @@ class SchedulerScreen:
         
         recommendations_window = tk.Toplevel(self.parent)
         recommendations_window.title("🤖 AI Study Recommendations")
-        recommendations_window.geometry("600x500")
+        recommendations_window.place(relwidth=0.6, relheight=0.5)
         recommendations_window.resizable(True, True)
         
         # Main scrollable frame

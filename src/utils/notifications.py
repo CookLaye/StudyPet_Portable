@@ -5,6 +5,7 @@ Handles system-level toast notifications via plyer and standard UI dialogs via t
 import tkinter as tk
 from tkinter import messagebox
 from plyer import notification as plyer_notify
+import threading
 
 class NotificationManager:
     """
@@ -20,18 +21,19 @@ class NotificationManager:
         Sends a native Windows system notification (Toast).
         Use this for non-blocking updates and alerts.
         """
-        try:
-            plyer_notify.notify(
-                title=title if title else NotificationManager.APP_NAME,
-                message=message,
-                app_name=NotificationManager.APP_NAME,
-                app_icon=NotificationManager.APP_ICON,
-                timeout=10 # Seconds notification stays on screen
-            )
-        except Exception as e:
-            print(f"[NotificationManager] Failed to send system notification: {e}")
-            # Fallback to standard messagebox if system notification fails
-            messagebox.showinfo(title if title else NotificationManager.APP_NAME, message)
+        def _fire():
+            try:
+                plyer_notify.notify(
+                    title=title if title else NotificationManager.APP_NAME,
+                    message=message,
+                    app_name=NotificationManager.APP_NAME,
+                    app_icon=NotificationManager.APP_ICON,
+                    timeout=10 # Seconds notification stays on screen
+                )
+            except Exception as e:
+                print(f"[NotificationManager] Failed to send system notification: {e}")
+
+        threading.Thread(target=_fire, daemon=True).start()
 
     @staticmethod
     def alert(title: str, message: str):
@@ -86,7 +88,7 @@ class StudyPetNotification:
         win = tk.Toplevel(parent)
         win.title("Camera Permission")
         win.resizable(False, False)
-        win.geometry("400x300")
+        win.geometry(f"{int(win.winfo_screenwidth() * 0.3)}x{int(win.winfo_screenheight() * 0.3)}")
         win.attributes('-topmost', True)
 
         container = tk.Frame(win, padx=20, pady=20)

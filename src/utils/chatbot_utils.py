@@ -178,11 +178,11 @@ class ChatBot:
         except urllib.error.HTTPError as e:
             if e.code == 503:
                 return "*(Sighs softly)* I'm still waking up... could you try again in a la- la la moment? Muuu~"
-            return f"*(Sighs softly)* I'm having a little trouble thinking right now... (Error: {e})"
+            return f"*(Sighs softly)* I'm having a little trouble... (Error: {e})"
         except urllib.error.URLError as e:
             return "*(Blinks)* I can't seem to find my brain... is the server running? Hehe!"
         except Exception as e:
-            return f"*(Sighs softly)* I'm having a little trouble thinking right now... (Error: {e})"
+            return f"*(Sighs softly)* I'm having a little trouble... (Error: {e})"
 
 if __name__ == "__main__":
     bot = ChatBot()

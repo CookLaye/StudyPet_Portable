@@ -30,6 +30,55 @@ from utils.model_manager import ModelManager
 from utils.chatbot_utils import ChatBot
 from models.pet import PetStage, PetEmotion
 
+class CustomTimerDialog(tk.Toplevel):
+    """Dialog for setting custom timer duration and speed multiplier."""
+    def __init__(self, parent, developer_mode=False):
+        super().__init__(parent)
+        self.title("Custom Duration")
+        self.place(relwidth=0.3, relheight=0.2)
+        self.resizable(False, False)
+        self.grab_set()
+
+        self.result = None
+
+        frame = tk.Frame(self, padx=20, pady=20)
+        frame.pack(fill="both", expand=True)
+
+        tk.Label(frame, text="Duration (minutes):").pack(pady=(0, 5))
+        self.duration_entry = tk.Entry(frame, justify="center")
+        self.duration_entry.pack(pady=(0, 15))
+        self.duration_entry.focus_set()
+
+        if developer_mode:
+            tk.Label(frame, text="Speed Multiplier:").pack(pady=(0, 5))
+            self.speed_var = tk.StringVar(value="1x")
+            self.speed_combo = ttk.Combobox(frame, textvariable=self.speed_var,
+                                         values=["1x", "2x", "3x"],
+                                         state="readonly", justify="center")
+            self.speed_combo.pack(pady=(0, 15))
+
+        btn = tk.Button(frame, text="Start", command=self.confirm)
+        btn.pack()
+
+    def confirm(self):
+        try:
+            duration_str = self.duration_entry.get()
+            if not duration_str:
+                return
+
+            duration = int(duration_str)
+            speed = 1
+            if hasattr(self, 'speed_var'):
+                speed = int(self.speed_var.get().replace('x', ''))
+
+            if 1 <= duration <= 60:
+                self.result = (duration, speed)
+                self.destroy()
+            else:
+                NotificationManager.error("Invalid Duration", "Duration must be between 1 and 60 minutes.")
+        except ValueError:
+            NotificationManager.error("Invalid Input", "Please enter a valid number.")
+
 # Constants
 DEFAULT_STUDY_DURATION = 25  # Default study session in minutes
 TIMER_PRESETS = [10, 15, 20, 25, 30]  # Quick-start timer options
@@ -128,7 +177,20 @@ class MainGameScreen:
             self._initialize_chat_state()
             self._initialize_playground_state()
             self._setup_ui()
-            
+
+            # Configure Pomodoro styles for progress bars
+            style = ttk.Style()
+            style.configure("Study.Horizontal.TProgressbar",
+                            troughcolor=self.colors.get("bg_secondary", "#F5F5F5"),
+                            background=self.colors.get("accent", "#4CAF50"))
+            style.configure("Break.Horizontal.TProgressbar",
+                            troughcolor=self.colors.get("bg_secondary", "#F5F5F5"),
+                            background="#4A90E2") # Blue for break
+
+            # Set default style for the taskbar timer progress
+            if hasattr(self, 'taskbar_timer_progress'):
+                self.taskbar_timer_progress.configure(style="Study.Horizontal.TProgressbar")
+
             # Scheduler temporarily disabled
             # self.schedule_plan = None  # e.g., {"mode": "quick", "focus": 25}
             # self.scheduled_session_ready = False
@@ -404,6 +466,7 @@ class MainGameScreen:
         self.pomo_break_duration = 5 * 60
         self.pomo_cycle_count = 0
         self.selected_task_idx = None # Index of task linked to current session
+        self.timer_speed = 1 # Speed multiplier for the timer (1 = normal)
 
 
         # Timer presets for quick-start
@@ -687,14 +750,15 @@ class MainGameScreen:
             relief="flat",
             bd=0
         )
-        nav_frame.place(x=0, y=0, relwidth=1.0, height=self.s(50))
+        nav_frame.place(x=0, y=0, relwidth=1.0, relheight=0.07)
 
         # Navigation buttons (NO dev button here - moved to settings)
         nav_buttons = [
             ("📅 Tasks", lambda: self.switch_tab("tasks")),
             ("📊 Stats", lambda: self.switch_tab("stats")),
             ("🎵 Music", lambda: self.switch_tab("music")),
-            ("⚙️ Settings", lambda: self.switch_tab("settings"))
+            ("⚙️ Settings", lambda: self.switch_tab("settings")),
+            ("🎮 Minigame", lambda: self.start_minigame())
         ]
 
         for text, command in nav_buttons:
@@ -707,57 +771,15 @@ class MainGameScreen:
                 padding=(self.s(12), self.s(6)),
                 font=("Arial", 10, "bold")
             )
-            btn.pack(side="left", padx=8, pady=6)
+            btn.pack(side="left", padx=self.s(8), pady=self.s(6))
 
-        # Music controls on right side
-        music_controls_frame = tk.Frame(nav_frame, bg=self.colors["bg_secondary"])
-        music_controls_frame.pack(side="right", padx=10)
-
-        self.music_label = tk.Label(
-            music_controls_frame,
-            text="🎵 Music:",
-            font=("Arial", 9, "bold"),
-            bg=self.colors["bg_secondary"],
-            fg=self.colors["text_dark"]  # Use pet-specific dark text
-        )
-
-        self.prev_button = create_rounded_button(
-            music_controls_frame,
-            text="⏮️",
-            command=self.previous_track_and_update,
-            style="accent",
-            radius=20,
-            padding=(self.s(10), self.s(4)),
-            font=("Arial", 9, "bold")
-        )
-
-        self.play_pause_button = create_rounded_button(
-            music_controls_frame,
-            text="⏸️",
-            command=self.toggle_music_playback,
-            style="accent",
-            radius=20,
-            padding=(self.s(10), self.s(4)),
-            font=("Arial", 9, "bold")
-        )
-
-        self.next_button = create_rounded_button(
-            music_controls_frame,
-            text="⏭️",
-            command=self.next_track_and_update,
-            style="accent",
-            radius=20,
-            padding=(self.s(10), self.s(4)),
-            font=("Arial", 9, "bold")
-        )
-
-        # Music controls frame remains for other controls
+        # Music controls removed from top bar to eliminate redundancy with Music panel
 
         # === LAYER 1: Collapsible UI blocks ===
         # Pet Status (top-left, collapsible)
         self.status_expanded = False
-        self.status_container = RoundedPanel(self.frame, radius=15, bg=self.colors["bg_main"])
-        self.status_container.place(x=self.s(20), y=self.s(60), width=self.s(250), height=self.s(40))
+        self.status_container = RoundedPanel(self.frame, radius=15, bg=self.colors["bg_main"], fit_content=False)
+        self.status_container.place(x=self.s(20), y=self.s(60), relwidth=0.15, relheight=0.05)
 
         self.status_header = tk.Frame(self.status_container.inner, bg=self.colors["bg_secondary"], relief="flat", bd=0, cursor="hand2")  # Use pet-specific background
         self.status_header.pack(fill="x")
@@ -770,7 +792,7 @@ class MainGameScreen:
             fg=self.colors["text_dark"],  # Use pet-specific dark text
             cursor="hand2"
         )
-        status_header_label.pack(pady=2)
+        status_header_label.pack(pady=self.s(2))
         status_header_label.bind("<Button-1>", self.toggle_status_panel)
 
         self.status_panel = tk.Frame(self.status_container.inner, bg=self.colors["bg_secondary"])  # Use pet-specific background
@@ -802,11 +824,11 @@ class MainGameScreen:
                 fg=self.colors["text_dark"],
                 anchor="w"
             )
-            value_label.pack(fill="x", pady=2, padx=5)
+            value_label.pack(fill="x", pady=self.s(2), padx=self.s(5))
             self.status_labels[item] = value_label
         
         # Make sure the status content is packed and visible
-        self.status_content.pack(fill="both", expand=True, padx=5, pady=5)
+        self.status_content.pack(fill="both", expand=True, padx=self.s(5), pady=self.s(5))
         
         # Force an immediate update of the pet info display using parent's after method
         if hasattr(self, 'parent') and hasattr(self.parent, 'after'):
@@ -823,11 +845,11 @@ class MainGameScreen:
             bg=panel_bg,
             fg=self.colors["text_dark"]
         )
-        self.dev_header.pack(anchor="w", pady=(5, 2), padx=5)
+        self.dev_header.pack(anchor="w", pady=(self.s(5), self.s(2)), padx=self.s(5))
         
         # Developer buttons frame - using grid for better layout control
         self.dev_buttons_frame = tk.Frame(self.dev_tools_frame, bg=panel_bg)
-        self.dev_buttons_frame.pack(fill="x", padx=5, pady=(0, 5))
+        self.dev_buttons_frame.pack(fill="x", padx=self.s(5), pady=(0, self.s(5)))
         
         # Top row: Affection controls
         self.affection_frame = tk.Frame(self.dev_buttons_frame, bg=panel_bg)
@@ -912,9 +934,9 @@ class MainGameScreen:
 
         # Study Timer (next to chat, top-right, collapsible)
         self.timer_expanded = False
-        self.timer_container = RoundedPanel(self.frame, radius=15, bg=self.colors["bg_main"])
-        # Place to the left of chat (chat left is at -280, distance d=20, timer width=350)
-        self.timer_container.place(relx=1.0, x=-self.s(650), y=self.s(60), width=self.s(350), height=self.s(40))
+        self.timer_container = RoundedPanel(self.frame, radius=15, bg=self.colors["bg_main"], fit_content=False)
+        # Place to the left of chat (chat left is at -350, distance d=20, timer width=0.23)
+        self.timer_container.place(relx=1.0, x=-self.s(720), y=self.s(60), relwidth=0.23, relheight=0.05)
 
 
         self.timer_header = tk.Frame(self.timer_container.inner, bg=self.colors["bg_secondary"], relief="flat", bd=0, cursor="hand2")
@@ -928,7 +950,7 @@ class MainGameScreen:
             fg=self.colors["text_dark"],
             cursor="hand2"
         )
-        self.timer_header_label.pack(pady=2)
+        self.timer_header_label.pack(pady=self.s(2))
         self.timer_header_label.bind("<Button-1>", self.toggle_timer_panel)
 
         self.timer_panel = tk.Frame(self.timer_container.inner, bg=self.colors["bg_secondary"])
@@ -942,8 +964,8 @@ class MainGameScreen:
 
         # === LAYER 2: Compact collapsible chatbox (top-right, below nav) ===
         self.chat_expanded = False
-        self.chat_container = RoundedPanel(self.frame, radius=15, bg=self.colors["bg_main"])
-        self.chat_container.place(relx=1.0, x=-self.s(280), y=self.s(60), width=self.s(260), height=self.s(40))
+        self.chat_container = RoundedPanel(self.frame, radius=15, bg=self.colors["bg_main"], fit_content=False)
+        self.chat_container.place(relx=1.0, x=-self.s(350), y=self.s(60), relwidth=0.225, relheight=0.05)
 
 
         # Chat header (always visible, clickable) - square
@@ -964,7 +986,7 @@ class MainGameScreen:
             fg=self.colors["text_dark"],  # Use pet-specific dark text
             cursor="hand2"
         )
-        chat_header_label.pack(pady=2)
+        chat_header_label.pack(pady=self.s(2))
         chat_header_label.bind("<Button-1>", self.toggle_chat_panel)
 
         # Chat panel (hidden initially, expands on click) - square interior
@@ -983,11 +1005,12 @@ class MainGameScreen:
         try:
             self.taskbar = tk.Frame(self.frame, bg=self.colors["bg_secondary"], bd=0, highlightthickness=0)
             # Near bottom, with margins; overlay style
-            self.taskbar.place(relx=0.5, rely=1.0, anchor='s', relwidth=0.9, height=self.s(56), y=-self.s(10))
+            window_height = self.parent.winfo_height()
+            self.taskbar.place(relx=0.5, rely=1.0, anchor='s', relwidth=0.9, height=0.06 * window_height, y=-self.s(10))
 
             # Left: Pet info frame
             left = tk.Frame(self.taskbar, bg=self.colors["bg_secondary"]) 
-            left.pack(side="left", padx=10)
+            left.pack(side="left", padx=self.s(10))
             
             # Pet name
             name_frame = tk.Frame(left, bg=self.colors["bg_secondary"])
@@ -1006,7 +1029,7 @@ class MainGameScreen:
 
             # Center-left: Affection progress bar
             center_left = tk.Frame(self.taskbar, bg=self.colors["bg_secondary"]) 
-            center_left.pack(side="left", fill="x", expand=True, padx=10)
+            center_left.pack(side="left", fill="x", expand=True, padx=self.s(10))
             
             # Evolution Progress label
             tk.Frame(center_left, height=2, bg=self.colors["bg_secondary"]).pack()  # Spacer
@@ -1026,7 +1049,7 @@ class MainGameScreen:
 
             # Center-right: XP progress bar
             center_right = tk.Frame(self.taskbar, bg=self.colors["bg_secondary"]) 
-            center_right.pack(side="left", fill="x", expand=True, padx=10)
+            center_right.pack(side="left", fill="x", expand=True, padx=self.s(10))
             
             # Timer Progress label
             tk.Frame(center_right, height=2, bg=self.colors["bg_secondary"]).pack()  # Spacer
@@ -1082,13 +1105,13 @@ class MainGameScreen:
         self.update_timer_ui()
 
     def stop_study_session(self):
-        """Stop the study session."""
+        """Stop the study session and reset UI to selection state."""
         # Stop the timer loop immediately
         self.stop_study_timer()
 
         # Stop drowsiness detection if active
         self._stop_drowsiness_detection()
-        
+
         # Hide speech bubble if visible
         if hasattr(self, '_speech_bubble_timer'):
             self.frame.after_cancel(self._speech_bubble_timer)
@@ -1115,8 +1138,22 @@ class MainGameScreen:
             # Update UI to show duration selection
             self.update_timer_ui()
             
-        # Reset drowsiness counters
+        # Reset session state
+        self.pomo_phase = "WORK"
         self.consecutive_drowsy_sessions = 0
+
+        # Reset UI buttons to selection state
+        if hasattr(self, 'start_pause_btn'):
+            self.start_pause_btn.config(text="Start", command=self.start_timer)
+        if hasattr(self, 'stop_btn'):
+            self.stop_btn.config(state="disabled")
+
+        # Reset progress bar to study color
+        if hasattr(self, 'taskbar_timer_progress'):
+            try:
+                self.taskbar_timer_progress.configure(style="Study.Horizontal.TProgressbar")
+            except Exception:
+                pass
 
     def pause_resume_study_session(self):
         """Pause or resume the current study session."""
@@ -1141,27 +1178,22 @@ class MainGameScreen:
                 self.stop_study_session()
 
     def start_custom_session(self):
-        """Start a custom duration session."""
+        """Start a custom duration session with speed multiplier support."""
         if self.study_timer_active:
             NotificationManager.notify("Timer Active", "A study session is already running!")
             return
 
-        # Ask for custom duration
-        custom_duration = simpledialog.askstring("Custom Duration", "Enter duration in minutes (1-60):", parent=self.parent)
+        # Ask for custom duration and speed using the dialog
+        dlg = CustomTimerDialog(self.parent, developer_mode=self.developer_mode)
+        self.parent.wait_window(dlg)
 
-        if custom_duration:
-            try:
-                duration = int(custom_duration)
-                if 1 <= duration <= 60:  # Limit to 1-60 minutes
-                    self.start_study_session(duration)
-                else:
-                    NotificationManager.error("Invalid Duration", "Duration must be between 1 and 60 minutes.")
-            except ValueError:
-                NotificationManager.error("Invalid Input", "Please enter a valid number.")
+        if dlg.result:
+            duration, speed = dlg.result
+            self.timer_speed = speed
+            self.start_study_session(duration)
 
-        # Clear the custom input after starting
-        if hasattr(self, 'custom_var'):
-            self.custom_var.set("")
+        # Reset speed to 1 after the session if desired,
+        # but usually we keep it until the next custom session or reset.
 
     def toggle_status_panel(self, event=None):
         """Toggle pet status panel expansion/collapse."""
@@ -1171,7 +1203,8 @@ class MainGameScreen:
             # Collapse
             self.status_panel.pack_forget()
             if hasattr(self, 'status_container'):
-                self.status_container.place(height=self.s(40))
+                window_height = self.parent.winfo_height()
+                self.status_container.place(height=0.04 * window_height, relheight=0)
             self.status_expanded = False
             for widget in self.status_header.winfo_children():
                 if isinstance(widget, tk.Label):
@@ -1182,7 +1215,7 @@ class MainGameScreen:
             if hasattr(self, 'status_container'):
                 # Use larger height if developer mode is enabled
                 height = self.s(240) if hasattr(self, 'developer_mode') and self.developer_mode else self.s(140)
-                self.status_container.place(height=height)
+                self.status_container.place(height=height, relheight=0)
             self.status_expanded = True
             for widget in self.status_header.winfo_children():
                 if isinstance(widget, tk.Label):
@@ -1197,16 +1230,16 @@ class MainGameScreen:
 
         if self.timer_expanded:
             # Expanded state - adjust height based on content
-            base_height = self.s(400)  # Increased to better fit timer content
+            base_height = self.s(360)  # Reduced to ~90% of 400 to better fit timer content
             if getattr(self, 'scheduled_session_ready', False):
                 base_height += 50  # Add space for the plan CTA if visible
 
             # Show the panel with proper expansion and increased padding
-            self.timer_panel.pack(fill="both", expand=True, pady=(10, 0), padx=5)
+            self.timer_panel.pack(fill="both", expand=True, pady=(self.s(10), 0), padx=self.s(5))
 
             # Update container height
             if hasattr(self, 'timer_container'):
-                self.timer_container.place(height=base_height)
+                self.timer_container.place(height=base_height, relheight=0)
 
             # Ensure panel is visible and properly sized
             self.timer_panel.update_idletasks()
@@ -1224,7 +1257,8 @@ class MainGameScreen:
             # Collapsed state
             self.timer_panel.pack_forget()
             if hasattr(self, 'timer_container'):
-                self.timer_container.place(height=self.s(40))
+                window_height = self.parent.winfo_height()
+                self.timer_container.place(height=0.04 * window_height, relheight=0)
             for widget in self.timer_header.winfo_children():
                 if isinstance(widget, tk.Label):
                     widget.config(text="⏱️ Study Timer ▼")
@@ -1241,7 +1275,8 @@ class MainGameScreen:
             except Exception:
                 pass
             if hasattr(self, 'chat_container'):
-                self.chat_container.place(height=self.s(40))
+                window_height = self.parent.winfo_height()
+                self.chat_container.place(height=0.04 * window_height, relheight=0)
             self.chat_expanded = False
             # Update header text
             for widget in self.chat_header.winfo_children():
@@ -1256,7 +1291,8 @@ class MainGameScreen:
             except Exception:
                 pass
             if hasattr(self, 'chat_container'):
-                self.chat_container.place(height=self.s(350))
+                window_height = self.parent.winfo_height()
+                self.chat_container.place(height=0.45 * window_height, relheight=0)
             self.chat_expanded = True
             # Update header text
             for widget in self.chat_header.winfo_children():
@@ -1487,7 +1523,7 @@ class MainGameScreen:
         
         # Main container with padding
         container = tk.Frame(parent_frame, bg=bg_color)
-        container.pack(fill='both', expand=True, padx=15, pady=15)
+        container.pack(fill='both', expand=True, padx=self.s(15), pady=self.s(15))
         
         # Timer display frame
         self.timer_display_frame = tk.Frame(container, bg=bg_color)
@@ -1528,11 +1564,11 @@ class MainGameScreen:
             fg=self.colors.get("text_dark", "#333"),
             font=("Arial", 10, "bold"),
             relief="flat",
-            padx=20,
-            pady=8,
+            padx=self.s(20),
+            pady=self.s(8),
             bd=0
         )
-        self.start_pause_btn.pack(side='left', expand=True, padx=5)
+        self.start_pause_btn.pack(side='left', expand=True, padx=self.s(5))
         
         # Stop button
         self.stop_btn = tk.Button(
@@ -1543,21 +1579,21 @@ class MainGameScreen:
             fg=self.colors.get("text_dark", "#333"),
             font=("Arial", 10, "bold"),
             relief="flat",
-            padx=20,
-            pady=8,
+            padx=self.s(20),
+            pady=self.s(8),
             bd=0,
             state="disabled"
         )
-        self.stop_btn.pack(side='left', expand=True, padx=5)
+        self.stop_btn.pack(side='left', expand=True, padx=self.s(5))
         
         # Create a separator line
         separator = ttk.Separator(container, orient='horizontal')
-        separator.pack(fill='x', pady=10)
+        separator.pack(fill='x', pady=self.s(10))
         
         # Create a frame for preset buttons
         presets_frame = tk.Frame(container, bg=bg_color)
         presets_frame.pack(fill='x', pady=(0, 10))
-        
+
         # Function to create preset buttons
         def create_preset_row(title, presets, break_info, row):
             # Title label with break info in parentheses
@@ -1586,12 +1622,12 @@ class MainGameScreen:
                     bd=1,
                     activebackground=self.colors.get("bg_accent", "#e0e0e0")
                 )
-                btn.grid(row=row*2+1, column=i, padx=2, pady=(0, 10), sticky='ew')
+                btn.grid(row=row*2+1, column=i, padx=self.s(2), pady=(0, self.s(10)), sticky='ew')
 
             # Configure column weights for even spacing
             for i in range(4):
                 presets_frame.columnconfigure(i, weight=1)
-        
+
         # Define Pomodoro presets
         pomo_presets = [
             (25, 5, "Classic"),
@@ -1602,10 +1638,18 @@ class MainGameScreen:
         # Create Pomodoro presets row
         create_preset_row("Pomodoro", pomo_presets, "Work/Break", 0)
 
-        # (Keep other preset rows if desired, but the user wanted to switch to Pomodoro presets)
-        # I will replace the existing preset rows with just the Pomodoro one for now to match the request.
+        # Task Selection Row
+        task_row = tk.Frame(container, bg=bg_color)
+        task_row.pack(fill='x', pady=(10, 0))
 
-        
+        tk.Label(task_row, text="Focus Task:", font=("Arial", 9, "bold"), bg=bg_color, fg=text_color).pack(side='left', padx=(0, 5))
+
+        self.task_selector = ttk.Combobox(task_row, state="readonly", font=("Arial", 9))
+        self.task_selector.pack(side='left', fill='x', expand=True)
+
+        # Populate initial task list
+        self.update_task_selector_list()
+
         # Initialize timer with default duration (25 minutes)
         default_minutes = 25
         self.total_duration_seconds = default_minutes * 60
@@ -1629,7 +1673,7 @@ class MainGameScreen:
 
         dlg = tk.Toplevel(self.parent)
         dlg.title("Select Task")
-        dlg.geometry("400x500")
+        dlg.place(relwidth=0.4, relheight=0.6)
         dlg.resizable(False, False)
         dlg.grab_set()
 
@@ -1677,7 +1721,7 @@ class MainGameScreen:
                 padding=(10, 5),
                 font=("Arial", 10)
             )
-            btn.pack(fill="x", pady=2, padx=5)
+            btn.pack(fill="x", pady=self.s(2), padx=self.s(5))
 
         # Option to study without a specific task
         create_rounded_button(
@@ -1708,9 +1752,10 @@ class MainGameScreen:
                 pass
                 
             self.timer_running = True
-            self.start_pause_btn.config(text="Pause")
+            self.start_pause_btn.config(text="⏸️ Pause")
             self.stop_btn.config(state="normal")
             self.update_timer_ui()
+
         
         # Timer state is now initialized in __init__
 
@@ -1738,24 +1783,46 @@ class MainGameScreen:
             print(f"Error updating taskbar progress: {e}")
 
     def set_pomo_duration(self, work_mins, break_mins):
-        """Set the Pomodoro work and break durations and reset timer to work phase."""
+        """Set the Pomodoro work and break durations.
+        If the timer is already running, the changes will apply to the next phase.
+        """
+        self.timer_speed = 1 # Reset speed to normal for preset sessions
         self.pomo_work_duration = work_mins * 60
         self.pomo_break_duration = break_mins * 60
 
-        # Start in WORK phase
-        self.pomo_phase = "WORK"
-        self.total_duration_seconds = self.pomo_work_duration
-        self.time_remaining = self.total_duration_seconds
-        self.study_session_duration = work_mins
+        # If timer is NOT running, we can reset to the new work duration
+        if not getattr(self, 'timer_running', False):
+            self.pomo_phase = "WORK"
+            self.total_duration_seconds = self.pomo_work_duration
+            self.time_remaining = self.total_duration_seconds
+            self.study_session_duration = work_mins
+            self.timer_var.set(self.format_time(self.time_remaining))
 
-        self.timer_var.set(self.format_time(self.time_remaining))
         self.status_var.set(f"Pomodoro: {work_mins}m Work / {break_mins}m Break")
 
         try:
             if hasattr(self, 'taskbar_timer_progress'):
-                self.taskbar_timer_progress.configure(value=0, maximum=self.total_duration_seconds)
+                # Only update maximum if not running, or update it and scale current value
+                if not getattr(self, 'timer_running', False):
+                    self.taskbar_timer_progress.configure(value=0, maximum=self.total_duration_seconds)
         except Exception:
             pass
+
+    def update_task_selector_list(self):
+        """Update the task dropdown with current non-completed tasks."""
+        if not hasattr(self, 'task_selector'):
+            return
+
+        tasks = getattr(self.app_state, 'tasks', [])
+        # Only show tasks that aren't done
+        filtered_tasks = [t['title'] for t in tasks if not t.get('done')]
+
+        if not filtered_tasks:
+            filtered_tasks = ["No active tasks"]
+
+        self.task_selector['values'] = filtered_tasks
+        if not self.task_selector.get():
+            self.task_selector.current(0)
 
     def select_task_for_session(self, task_idx):
         """Link the current study session to a specific task."""
@@ -1773,12 +1840,13 @@ class MainGameScreen:
             # Only decrement time if not paused
             if not getattr(self, 'study_timer_paused', False):
                 if self.time_remaining > 0:
-                    self.time_remaining -= 1
+                    # Subtract based on timer speed multiplier
+                    self.time_remaining -= getattr(self, 'timer_speed', 1)
 
             self.timer_var.set(self.format_time(self.time_remaining))
             if hasattr(self, 'taskbar_timer_progress') and hasattr(self, 'total_duration_seconds'):
                 try:
-                    self.taskbar_timer_progress.configure(value=max(0, self.total_duration_seconds - self.time_remaining))
+                    self.taskbar_timer_progress.configure(maximum=self.total_duration_seconds, value=max(0, self.total_duration_seconds - self.time_remaining))
                 except Exception:
                     pass
             if self.time_remaining <= 0:
@@ -1798,7 +1866,7 @@ class MainGameScreen:
             self.timer_var.set(self.format_time(self.time_remaining))
             if hasattr(self, 'taskbar_timer_progress') and hasattr(self, 'total_duration_seconds'):
                 try:
-                    self.taskbar_timer_progress.configure(value=max(0, self.total_duration_seconds - self.time_remaining))
+                    self.taskbar_timer_progress.configure(maximum=self.total_duration_seconds, value=max(0, self.total_duration_seconds - self.time_remaining))
                 except Exception:
                     pass
         
@@ -1813,16 +1881,21 @@ class MainGameScreen:
 
         # Task selection before starting
         if not from_resume:
-            # If no task is selected, prompt the user to select one
-            if self.selected_task_idx is None:
-                # We can't easily show a complex dialog here without a new class,
-                # so we'll notify the user to open the Tasks panel and select a task first.
-                # However, the user expects the app to "ask what task", similar to todo app.
-                # Let's implement a simple task selection dialog.
-                self._prompt_for_task_selection()
-                # We return here because start_timer should only proceed after task selection
-                # and is usually called by _focus_task or after duration set.
-                return
+            # Get task from the dropdown instead of prompting with a dialog
+            if hasattr(self, 'task_selector'):
+                selected_text = self.task_selector.get()
+                if selected_text and selected_text != "No active tasks":
+                    # Find the index of the task with this title
+                    task_idx = next((i for i, t in enumerate(self.app_state.tasks)
+                                   if t['title'] == selected_text and not t.get('done')), None)
+                    if task_idx is not None:
+                        self.select_task_for_session(task_idx)
+                    else:
+                        self.selected_task_idx = -1 # Study without specific task
+                else:
+                    self.selected_task_idx = -1 # Study without specific task
+            else:
+                self.selected_task_idx = -1
 
         # Check for developer mode and ask for custom time
         if not from_resume and self._check_developer_mode_and_prompt():
@@ -1838,6 +1911,13 @@ class MainGameScreen:
         if not hasattr(self, 'total_duration_seconds') or self.total_duration_seconds <= 0:
             self.total_duration_seconds = 25 * 60  # Default to 25 minutes
 
+        # Sync progress bar maximum
+        try:
+            if hasattr(self, 'taskbar_timer_progress'):
+                self.taskbar_timer_progress.configure(maximum=self.total_duration_seconds)
+        except Exception:
+            pass
+
         self.time_remaining = self.total_duration_seconds
 
         try:
@@ -1849,9 +1929,12 @@ class MainGameScreen:
 
         # Update UI
         self.study_timer_active = True
+        self.study_timer_paused = False
         self.timer_running = True
         if hasattr(self, 'start_pause_btn'):
-            self.start_pause_btn.config(text="Pause", command=self.pause_resume_study_session)
+            self.start_pause_btn.config(text="⏸️ Pause", command=self.pause_resume_study_session)
+
+
         if hasattr(self, 'stop_btn'):
             self.stop_btn.config(state="normal")
 
@@ -1860,17 +1943,12 @@ class MainGameScreen:
         self.update_timer_ui()
         
     def timer_finished(self):
-        """Handle timer completion and handle Pomodoro phase transitions."""
-        # If not in a Pomodoro cycle, use simple timer logic
-        if not hasattr(self, 'pomo_phase') or self.pomo_phase not in ["WORK", "BREAK"]:
-            self._handle_simple_timer_finished()
-            return
-
-        # Handle Pomodoro Transitions
+        """Handle timer completion and handle session phase transitions (Study -> Break -> Reset)."""
+        # Handle Session Transitions
         if self.pomo_phase == "WORK":
             # 1. Reward & Task Update
             self.pomo_cycle_count += 1
-            if self.selected_task_idx is not None and self.selected_task_idx < len(self.app_state.tasks):
+            if self.selected_task_idx is not None and 0 <= self.selected_task_idx < len(self.app_state.tasks):
                 self.app_state.tasks[self.selected_task_idx]["pomo_count"] = self.app_state.tasks[self.selected_task_idx].get("pomo_count", 0) + 1
                 self.app_state.save_data()
                 # Redraw tasks panel if it's visible
@@ -1894,15 +1972,28 @@ class MainGameScreen:
             self.total_duration_seconds = self.pomo_break_duration
             self.time_remaining = self.total_duration_seconds
             self.status_var.set("Work complete! Time for a break. ☕")
-            NotificationManager.notify("Pomodoro: Break Time", "Work session finished! Take a short break to recharge.")
+            NotificationManager.notify("Break Time", "Work session finished! Take a short break to recharge.")
+
+            # Enable minigame after completing WORK phase
+            self.app_state.minigame_available = True
+            self.app_state.save_data()
+
+            # Change progress bar to break color (blue)
+            if hasattr(self, 'taskbar_timer_progress'):
+                try:
+                    self.taskbar_timer_progress.configure(style="Break.Horizontal.TProgressbar")
+                except Exception:
+                    pass
 
         else: # pomo_phase == "BREAK"
-            # Transition to WORK
-            self.pomo_phase = "WORK"
-            self.total_duration_seconds = self.pomo_work_duration
-            self.time_remaining = self.total_duration_seconds
-            self.status_var.set("Break over! Back to work. ✍️")
-            NotificationManager.notify("Pomodoro: Focus Time", "Break is over! Let's get back to studying.")
+            # Return to selection state
+            self.stop_study_session()
+            self.status_var.set("Break finished! Ready for a new session.")
+            NotificationManager.notify("Session Cycle Complete", "You've finished a full Work/Break cycle. Ready to start again?")
+
+            # IMPORTANT: Do NOT restart the timer after a break.
+            # The user must manually start a new session.
+            return
 
         # Update UI for the new phase
         self.timer_var.set(self.format_time(self.time_remaining))
@@ -1913,9 +2004,12 @@ class MainGameScreen:
         # Automatically restart the timer for the next phase
         self.timer_running = True
         if hasattr(self, 'start_pause_btn'):
-            self.start_pause_btn.config(text="Pause")
+            self.start_pause_btn.config(text="⏸️ Pause", command=self.pause_resume_study_session)
         if hasattr(self, 'stop_btn'):
             self.stop_btn.config(state="normal")
+
+        # Kickstart the timer loop for the new phase
+        self.update_timer_ui()
 
     def _show_encouragement_message(self):
         """Show encouragement message on main thread."""
@@ -2277,15 +2371,22 @@ class MainGameScreen:
 
         tasks_window = tk.Toplevel(self.parent)
         tasks_window.title("📅 Study Tasks")
-        tasks_window.geometry(f"{self.s(800)}x{self.s(600)}")
-        tasks_window.minsize(self.s(600), self.s(400))
+
+        # Calculate size relative to parent
+        parent_w = self.parent.winfo_width() if self.parent.winfo_width() > 1 else 1280
+        parent_h = self.parent.winfo_height() if self.parent.winfo_height() > 1 else 720
+        win_w = max(self.s(600), int(parent_w * 0.8))
+        win_h = max(self.s(400), int(parent_h * 0.8))
+        tasks_window.geometry(f"{win_w}x{win_h}")
+
+        tasks_window.minsize(self.s(600), self.s(650))
         tasks_window.resizable(True, True)
         tasks_window.configure(bg=colors.get("bg_main", "#FFFFFF"))
 
         # Create the TasksPanel inside the window
         # We use fit_content=False so it fills the window and handles its own scrolling
         tasks_panel = TasksPanel(tasks_window, app_state=self.app_state, main_game_screen=self, fit_content=False)
-        tasks_panel.pack(fill="both", expand=True, padx=20, pady=20)
+        tasks_panel.pack(fill="both", expand=True, padx=self.s(20), pady=self.s(20))
 
     def show_statistics(self):
         """Display user and pet statistics in a clean format."""
@@ -2362,15 +2463,15 @@ class MainGameScreen:
                 try:
                     self.prev_button.pack_info()
                 except tk.TclError:
-                    self.prev_button.pack(side="left", padx=2)
+                    self.prev_button.pack(side="left", padx=self.s(2))
                 try:
                     self.play_pause_button.pack_info()
                 except tk.TclError:
-                    self.play_pause_button.pack(side="left", padx=2)
+                    self.play_pause_button.pack(side="left", padx=self.s(2))
                 try:
                     self.next_button.pack_info()
                 except tk.TclError:
-                    self.next_button.pack(side="left", padx=2)
+                    self.next_button.pack(side="left", padx=self.s(2))
                 # Update play/pause text
                 if self.music_player.is_music_playing():
                     self._btn_set_text(self.play_pause_button, "⏸️")
@@ -2495,7 +2596,14 @@ class MainGameScreen:
 
         music_window = tk.Toplevel(self.parent)
         music_window.title("🎵 Music Player")
-        music_window.geometry(f"{self.s(520)}x{self.s(560)}")
+
+        # Calculate size relative to parent
+        parent_w = self.parent.winfo_width() if self.parent.winfo_width() > 1 else 1280
+        parent_h = self.parent.winfo_height() if self.parent.winfo_height() > 1 else 720
+        win_w = max(self.s(420), int(parent_w * 0.5))
+        win_h = max(self.s(460), int(parent_h * 0.7))
+        music_window.geometry(f"{win_w}x{win_h}")
+
         music_window.minsize(self.s(420), self.s(460))
         music_window.resizable(True, True)
         music_window.configure(bg=colors.get("bg_main", "#FFFFFF"))
@@ -2617,7 +2725,7 @@ class MainGameScreen:
             padding=(10, 6),
             font=("Arial", 9, "bold"),
             style="accent"
-        ).grid(row=0, column=0, padx=5, pady=5)
+        ).grid(row=0, column=0, padx=self.s(5), pady=self.s(5))
 
         play_pause_btn = create_rounded_button(
             button_frame,
@@ -2628,7 +2736,7 @@ class MainGameScreen:
             font=("Arial", 9, "bold"),
             style="accent"
         )
-        play_pause_btn.grid(row=0, column=1, padx=5, pady=5)
+        play_pause_btn.grid(row=0, column=1, padx=self.s(5), pady=self.s(5))
 
         # Store reference for dynamic updates
         self.music_play_pause_btn = play_pause_btn
@@ -2641,7 +2749,7 @@ class MainGameScreen:
             padding=(10, 6),
             font=("Arial", 9, "bold"),
             style="accent"
-        ).grid(row=0, column=2, padx=5, pady=5)
+        ).grid(row=0, column=2, padx=self.s(5), pady=self.s(5))
 
         # Stop button
         create_rounded_button(
@@ -2652,7 +2760,7 @@ class MainGameScreen:
             padding=(10, 6),
             font=("Arial", 9, "bold"),
             style="accent"
-        ).grid(row=1, column=1, padx=5, pady=5)
+        ).grid(row=1, column=1, padx=self.s(5), pady=self.s(5))
 
         # Volume control
         volume_frame = ttk.LabelFrame(controls_frame, text="Volume Control", padding=15, style="Music.TLabelframe")
@@ -3143,15 +3251,15 @@ class MainGameScreen:
         """Update developer UI elements based on current state."""
         if hasattr(self, 'dev_tools_frame'):
             if self.developer_mode:
-                self.dev_tools_frame.pack(fill="x", pady=(10, 5), padx=5)
+                self.dev_tools_frame.pack(fill="x", pady=(self.s(10), self.s(5)), padx=self.s(5))
                 # Update status panel height if expanded
                 if hasattr(self, 'status_expanded') and self.status_expanded and hasattr(self, 'status_container'):
-                    self.status_container.place_configure(height=self.s(460))
+                    self.status_container.place_configure(height=self.s(460), relheight=0)
             else:
                 self.dev_tools_frame.pack_forget()
                 # Reset status panel height if expanded
                 if hasattr(self, 'status_expanded') and self.status_expanded and hasattr(self, 'status_container'):
-                    self.status_container.place_configure(height=self.s(240))
+                    self.status_container.place_configure(height=self.s(240), relheight=0)
 
     # -------------------------------------------------------------------------
     # Missing method implementations (restored)
@@ -3244,4 +3352,69 @@ class MainGameScreen:
         except (ValueError, TypeError):
             self.show_notification("Invalid duration — using default.")
             return False
+
+    def start_minigame(self):
+        """Start the minigame session."""
+        if not self.app_state.minigame_available:
+            NotificationManager.notify("Minigame Unavailable", "You've already played the minigame! Complete a study session to unlock it again.")
+            return
+
+        # Disable minigame and persist
+        self.app_state.minigame_available = False
+        self.app_state.save_data()
+
+        # Minigame state
+        self.minigame_active = True
+        self.minigame_score = 0
+
+        # Create Stop Game button
+        self.btn_stop_game = create_rounded_button(
+            self.frame,
+            text="Stop Game",
+            command=self.stop_minigame,
+            style="accent",
+            radius=25,
+            padding=(15, 10),
+            font=("Arial", 12, "bold")
+        )
+        # Position bottom-right
+        self.btn_stop_game.place(relx=0.95, rely=0.95, anchor='se')
+
+        # Tell playground to start spawning circles
+        if self.playground_renderer:
+            self.playground_renderer.start_minigame(self)
+
+        NotificationManager.notify("🎮 Minigame Started!", "Eat as many circles as you can!")
+
+    def stop_minigame(self):
+        """Stop the minigame session and reward the user."""
+        if not hasattr(self, 'minigame_active') or not self.minigame_active:
+            return
+
+        self.minigame_active = False
+
+        # Get score from playground renderer
+        score = 0
+        if self.playground_renderer:
+            score = getattr(self.playground_renderer, 'circles_eaten', 0)
+
+        # Reward: for every 10 circles (round up), add 10 affection
+        import math
+        reward = math.ceil(score / 10) * 10
+
+        if reward > 0:
+            self.app_state.affection += reward
+            self.update_pet_info_display()
+            NotificationManager.notify("🎮 Game Over!", f"You ate {score} circles and earned +{reward} affection!")
+        else:
+            NotificationManager.notify("🎮 Game Over!", f"You ate {score} circles. Try harder next time!")
+
+        # Cleanup UI
+        if hasattr(self, 'btn_stop_game'):
+            self.btn_stop_game.destroy()
+
+        # Tell playground to clear circles
+        if self.playground_renderer:
+            self.playground_renderer.stop_minigame()
+
 

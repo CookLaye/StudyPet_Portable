@@ -6,6 +6,7 @@ import os
 import threading
 from typing import Dict, Optional, Any, TypeVar, Type
 from datetime import timedelta
+from src.utils.notifications import NotificationManager
 from src.utils.file_utils import atomic_write, atomic_read, backup_file
 from .pet import Pet, PetType, PetStage, PetEmotion
 from .user import User
@@ -36,6 +37,7 @@ class AppState:
         self.on_evolve = None
         self.last_saved_at = None
         self.tasks = []
+        self.minigame_available = True
 
 
 
@@ -251,6 +253,15 @@ class AppState:
         return False
 
     def _serialize_for_save(self) -> Dict[str, Any]:
+        def make_serializable(obj):
+            if isinstance(obj, (int, float, str, bool, type(None))):
+                return obj
+            if isinstance(obj, dict):
+                return {k: make_serializable(v) for k, v in obj.items()}
+            if isinstance(obj, (list, tuple)):
+                return [make_serializable(x) for x in obj]
+            return str(obj)
+
         with self._lock:
             from datetime import datetime
             data = {
@@ -266,8 +277,10 @@ class AppState:
                 'longest_streak': self.longest_streak,
                 'last_saved_at': datetime.now().isoformat(),
                 'tasks': self.tasks,
+                'minigame_available': self.minigame_available,
                 'settings': self.settings
             }
+            return make_serializable(data)
 
 
 
@@ -280,7 +293,6 @@ class AppState:
                 return [make_serializable(x) for x in obj]
             return str(obj)
 
-        return make_serializable(data)
 
     def update_user_stats(self, study_time: int, questions_answered: int, persist: bool = False):
         with self._lock:
@@ -344,26 +356,53 @@ class AppState:
         except Exception:
             return False
 
+    def save_tasks(self) -> bool:
+        """Specifically save the tasks list to persist changes."""
+        print("[REPRO] AppState.save_tasks called")
+        return self.save_data()
+
     def save_data(self, force_backup: bool = False) -> bool:
         with self._lock:
             try:
+                print(f"[REPRO] AppState.save_data called (force_backup={force_backup})")
                 serialized_data = self._serialize_for_save()
                 os.makedirs(os.path.dirname(self.save_file_path), exist_ok=True)
 
                 if force_backup:
                     backup_file(self.save_file_path)
 
-                return atomic_write(self.save_file_path, serialized_data)
+                success = atomic_write(self.save_file_path, serialized_data)
+                if not success:
+                    print("[REPRO] atomic_write failed, retrying once...")
+                    success = atomic_write(self.save_file_path, serialized_data)
+
+                if not success:
+                    NotificationManager.error("Save Error", "Failed to save application data. Your changes may be lost.")
+
+                return success
             except Exception as e:
-                print(f"Error saving data: {e}")
+                print(f"[REPRO] Exception in save_data: {e}")
                 import traceback
                 traceback.print_exc()
+
+                # Retry once on exception
+                try:
+                    print("[REPRO] Retrying save_data after exception...")
+                    serialized_data = self._serialize_for_save()
+                    os.makedirs(os.path.dirname(self.save_file_path), exist_ok=True)
+                    if force_backup:
+                        backup_file(self.save_file_path)
+                    if atomic_write(self.save_file_path, serialized_data):
+                        return True
+                except Exception as retry_e:
+                    print(f"[REPRO] Retry also failed: {retry_e}")
+
+                NotificationManager.error("Save Error", f"A critical error occurred while saving: {e}")
                 return False
 
     @classmethod
     def load_or_create(cls: Type[T]) -> T:
         instance = cls()
-        instance.load_data()
         return instance
 
     def load_data(self) -> bool:
@@ -441,15 +480,17 @@ class AppState:
                 self.pet_name = data.get('pet_name', '')
                 pet_type_str = data.get('pet_type')
                 self.pet_type = PetType(pet_type_str) if pet_type_str else None
-                self.stage = PetStage(data.get('pet_stage', 1))
-                self.affection = data.get('affection', 0)
                 self.total_study_time = data.get('total_study_time', 0)
                 self.last_day_visited = data.get('last_day_visited')
                 self.current_streak = data.get('current_streak', 0)
                 self.longest_streak = data.get('longest_streak', 0)
                 self.last_saved_at = data.get('last_saved_at')
                 self.tasks = data.get('tasks', [])
+                self.minigame_available = data.get('minigame_available', True)
                 self.settings = data.get('settings', {})
+                # Set backing fields directly to avoid triggering save_data() during load
+                self._pet_stage = data.get('pet_stage', 1)
+                self._affection = data.get('affection', 0)
             elif version in ['1.0', '1.5']:
                 self._migrate_from_legacy_format(data)
 
@@ -479,8 +520,8 @@ class AppState:
                         self.pet_type = PetType.PENGUIN
 
             pet_state = data.get('pet_state', {})
-            self.stage = PetStage(pet_state.get('stage', 1))
-            self.affection = pet_state.get('affection', 0)
+            self._pet_stage = pet_state.get('stage', 1)
+            self._affection = pet_state.get('affection', 0)
 
             last_study_date = user_data.get('last_study_date')
             if last_study_date:
@@ -556,6 +597,8 @@ class AppState:
                 self.current_pet = None
                 self.user = None
                 self.settings = {}
+                self.tasks = []
+                self.minigame_available = True
 
                 self.study_session = {
                     'active': False, 'type': None, 'schedule': None, 'current_block': 0,
