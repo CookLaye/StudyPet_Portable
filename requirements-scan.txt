@@ -1,0 +1,11 @@
+# Facial stress scan (stress_scan/). Installed by the launchers AFTER requirements.txt.
+# If this file cannot be installed on a computer (for example an Intel Mac), StudyPet still
+# starts; only the facial scan is unavailable there.
+#
+# IMPORTANT: use opencv-contrib-python and NEVER plain opencv-python / opencv-python-headless.
+# mediapipe already depends on opencv-contrib-python; having two OpenCV packages in one
+# environment makes them overwrite each other's files (the "cv2" folder), which breaks the camera.
+numpy==2.4.6
+opencv-contrib-python==4.13.0.92
+onnxruntime==1.30.0
+mediapipe==1.0.1

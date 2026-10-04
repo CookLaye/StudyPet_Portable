@@ -4,6 +4,7 @@ Application State - Manages user data, settings, and game state
 
 import os
 import threading
+import time
 from typing import Dict, Optional, Any, TypeVar, Type
 from datetime import timedelta
 from src.utils.notifications import NotificationManager
@@ -211,6 +212,31 @@ class AppState:
                 self.user = User(self.username)
 
             self.save_data()
+
+    def hatch_pet(self) -> bool:
+        """Move the current pet from the unhatched state (EGG) to BABY.
+
+        Returns True if a hatch happened, False if there was nothing to hatch.
+        EGG is only a transient 'not hatched yet' state; see the hatch screen.
+        """
+        with self._lock:
+            # Compare ints, not enum members (module-alias trap, see spec T1)
+            if self.pet_type is None or self._pet_stage != PetStage.EGG.value:
+                return False
+
+            # AppState is the source of truth. The stage setter resets affection to 0,
+            # recomputes emotion, notifies subscribers and saves.
+            self.stage = PetStage.BABY
+            # Setter derives emotion from affection (0% -> SAD). A newborn starts HAPPY.
+            self.emotion = PetEmotion.HAPPY
+
+            # Keep the legacy Pet object in sync (it is NOT updated automatically).
+            if self.current_pet is None:
+                self.current_pet = Pet(self.pet_type, self.pet_name)
+            self.current_pet.stage = PetStage.BABY        # Pet.stage setter resets its affection
+            self.current_pet.emotion = PetEmotion.HAPPY
+            self.current_pet.hatch_time = time.time()
+            return True
 
     def set_last_day_visited(self, date_str: Optional[str], persist: bool = False) -> None:
         with self._lock:

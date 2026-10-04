@@ -1,0 +1,6 @@
+# Development-only tools (not installed by the launchers)
+-r requirements.txt
+-r requirements-scan.txt
+pytest>=6.0.0
+black>=21.0.0
+flake8>=3.8.0

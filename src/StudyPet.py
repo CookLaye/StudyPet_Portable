@@ -1,3 +1,8 @@
+import sys
+for _s in (sys.stdout, sys.stderr):
+    try: _s.reconfigure(encoding="utf-8", errors="replace")
+    except Exception: pass
+
 """
 StudyPet - AI-powered virtual pet study companion
 
@@ -52,6 +57,7 @@ else:
 # Configure environment variables before importing libraries
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'  # Suppress TensorFlow oneDNN warnings
 os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = '1'  # Suppress pygame support message
+os.environ.setdefault('OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS', '0')  # STUDYPET-LAUNCHER-FIX: faster, more reliable Windows webcam start-up
 os.environ['SDL_VIDEO_ALLOW_SCREENSAVER'] = '1'  # Allow screensaver during gameplay
 
 # Configure warning filters
@@ -66,6 +72,7 @@ import pygame
 # Local imports
 from src.screens.greeting_screen import GreetingScreen
 from src.screens.pet_selection_screen import PetSelectionScreen
+from src.screens.hatch_screen import HatchScreen
 from src.screens.main_game_screen import MainGameScreen
 from src.models.app_state import AppState
 from src.models.pet import PetType, Pet  # Import Pet class for pet creation
@@ -131,6 +138,8 @@ class VirtualPetStudyApp:
         self.app_state = self._initialize_app_state()
         self.app_state.start_session()  # Create crash marker
         self.music_player = MusicPlayer()
+        self.music_player.play_random_default()
+        self.music_player.queue_analysis_for_library()
         self.session_manager = self._initialize_session_manager()
 
         # Start with greeting screen
@@ -270,6 +279,7 @@ class VirtualPetStudyApp:
             GreetingScreen: The created greeting screen instance, or None if failed
         """
         self._reset_window_title()
+        self._stress_gate_done = False      # next entry to the main screen starts with the check-in
         self._cleanup_current_screen()
 
         try:
@@ -332,12 +342,47 @@ class VirtualPetStudyApp:
             traceback.print_exc()
             return None
 
-    def show_main_game(self) -> Optional['MainGameScreen']:
+    def show_hatch_screen(self):
+        """Show the click-to-hatch screen for a chosen but unhatched pet."""
+        self._cleanup_current_screen()
+        self._update_window_title_with_pet()
+        try:
+            self.current_screen = HatchScreen(
+                parent=self.root,
+                app_state=self.app_state,
+                on_hatched_callback=self.handle_hatched,
+            )
+            self.root.update_idletasks()
+            return self.current_screen
+        except Exception as e:
+            print(f"Error creating hatch screen: {e}")
+            import traceback; traceback.print_exc()
+            # Fail safe: never strand the user on a broken screen. Hatch instantly and continue.
+            self.app_state.hatch_pet()
+            return self.show_main_game()
+
+    def handle_hatched(self):
+        """Called by HatchScreen after the pet has been hatched (stage is now BABY)."""
+        self.show_main_game()
+
+    def show_main_game(self, access_mode="full") -> Optional['MainGameScreen']:
         """Display the main game screen with pet-specific theme.
 
         Returns:
             MainGameScreen: The created main game screen, or None if failed
         """
+        # An unhatched pet (stage EGG == 1) must never reach the main screen.
+        # Covers: quit-during-hatch, old saves stuck on Egg, legacy saves.
+        try:
+            if self.app_state.pet_type is not None and self.app_state.stage.value == 1:
+                return self.show_hatch_screen()
+        except Exception as e:
+            print(f"Warning: hatch check failed: {e}")
+
+        # Stress check-in: the main screen stays hidden until it is done (once per launch)
+        if not getattr(self, "_stress_gate_done", False):
+            return self.show_stress_gate()
+
         self._cleanup_current_screen()
         self._update_window_title_with_pet()
 
@@ -347,7 +392,8 @@ class VirtualPetStudyApp:
                 self.app_state,
                 self.music_player,
                 app_controller=self,
-                session_manager=self.session_manager
+                session_manager=self.session_manager,
+                access_mode=access_mode,
             )
             # Ensure pet theme is applied and UI refreshed on first run
             # MainGameScreen already calls setup_pet_theme in __init__, but we re-apply to be safe
@@ -365,6 +411,31 @@ class VirtualPetStudyApp:
             # Fallback to greeting screen
             self.show_greeting()
             return None
+
+    def show_stress_gate(self):
+        """Full-screen stress check-in shown before the main screen."""
+        self._cleanup_current_screen()
+        self._update_window_title_with_pet()
+        try:
+            from screens.stress_gate_screen import StressGateScreen
+            self.current_screen = StressGateScreen(
+                self.root, self.app_state, self.music_player,
+                on_finished=self._on_stress_gate_finished,
+            )
+            self.root.update_idletasks()
+            return self.current_screen
+        except Exception as e:
+            print(f"Error creating stress gate: {e}")
+            import traceback
+            traceback.print_exc()
+            # Fail safe: never strand the user on a broken screen.
+            self._stress_gate_done = True
+            return self.show_main_game()
+
+    def _on_stress_gate_finished(self, access_mode="full"):
+        """Called by the gate: 'full' or 'restricted'."""
+        self._stress_gate_done = True
+        self.show_main_game(access_mode=access_mode)
 
     def _update_window_title_with_pet(self) -> None:
         """Update window title to include current pet's name."""
@@ -409,7 +480,7 @@ class VirtualPetStudyApp:
             # Update window title and navigate to main game
             self._update_window_title_with_pet()
             self.root.update_idletasks()
-            self.show_main_game()
+            self.show_hatch_screen()
 
         except Exception as e:
             self._handle_pet_selection_error(e)
@@ -499,8 +570,10 @@ class VirtualPetStudyApp:
             # Reset the music player
             try:
                 if hasattr(self, 'music_player'):
-                    self.music_player.stop()
+                    self.music_player.cleanup()
                 self.music_player = MusicPlayer()
+                self.music_player.play_random_default()
+                self.music_player.queue_analysis_for_library()
             except Exception as e:
                 print(f"Error reinitializing music player: {e}")
                 self.music_player = None

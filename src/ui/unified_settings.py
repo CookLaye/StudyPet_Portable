@@ -148,6 +148,7 @@ class UnifiedSettings:
         # Title with decorative styling in rounded block
         title_panel = RoundedPanel(settings_frame, radius=THEME.RADIUS_MED, bg=self.colors["bg_secondary"], padding=THEME.PADDING_SMALL)
         title_panel.set_padding(10)
+        title_panel.set_min_size(height=80)
         title_panel.pack(fill="x", pady=(0, 16))
         title_frame = tk.Frame(title_panel.inner, bg=self.colors["bg_secondary"], relief="flat", bd=0)
         title_frame.pack(fill="x")
@@ -184,6 +185,7 @@ class UnifiedSettings:
         """Create the app information section."""
         info_panel = RoundedPanel(parent, radius=THEME.RADIUS_MED, bg="#F2F2F2", padding=THEME.PADDING_SMALL)
         info_panel.set_padding(10)
+        info_panel.set_min_size(height=170)
         info_panel.pack(fill="x", pady=(0, 12))
         container = info_panel.inner
         
@@ -228,13 +230,11 @@ class UnifiedSettings:
         
         features_text = (
             "Current features available:\n\n"
-            "• Music volume control and playlist management\n"
-            "• Study timer with custom durations\n"
-            "• Pet evolution and emotion system\n"
-            "• Study progress and statistics tracking\n"
-            "• Clean and modern interface\n"
-            "• Interactive pet chat system\n"
-            "• Responsive design for all screen sizes"
+            "• Facial scan & stress-check diagnosis\n"
+            "• Stress-Relief Mailbox — write it out, let your pet take it from you\n"
+            "• Pet companion with evolving moods\n"
+            "• Calming music player\n"
+            "• Light study-session support"
         )
         
         features_label = tk.Label(
@@ -246,6 +246,11 @@ class UnifiedSettings:
             justify="left"
         )
         features_label.pack(padx=12, pady=(0, 10))
+        container.pack_propagate(True)
+        container.update_idletasks()
+        content_height = container.winfo_reqheight()
+        container.pack_propagate(False)
+        settings_panel.set_min_size(height=content_height + 20)
     
     def create_developer_mode_section(self, parent):
         """Create the developer mode section."""

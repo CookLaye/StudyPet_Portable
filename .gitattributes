@@ -1,0 +1,5 @@
+# Keep launcher line endings correct no matter which OS commits them.
+# (A macOS shell script with Windows line endings fails with "bad interpreter: /bin/bash^M".)
+*.sh      text eol=lf
+*.command text eol=lf
+*.bat     text eol=crlf

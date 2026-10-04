@@ -15,8 +15,9 @@ Version: 1.0
 import os
 import random
 import threading
+import time
 import tkinter as tk
-from tkinter import ttk, simpledialog, scrolledtext
+from tkinter import ttk, simpledialog, scrolledtext, filedialog, messagebox
 from PIL import Image, ImageTk
 import pygame
 # Local imports
@@ -26,6 +27,7 @@ from ui.unified_settings import show_unified_settings
 from ui.pet_theme import apply_pet_theme
 from ui.tasks_panel import TasksPanel
 from utils.notifications import NotificationManager
+from utils.stress_diagnosis import StressDiagnosisState
 from utils.model_manager import ModelManager
 from utils.chatbot_utils import ChatBot
 from models.pet import PetStage, PetEmotion
@@ -132,7 +134,8 @@ class MainGameScreen:
             print(f"Error in stop_study_timer: {e}")
     
     # === Initialization ===
-    def __init__(self, parent, app_state, music_player, app_controller=None, session_manager=None):
+    def __init__(self, parent, app_state, music_player, app_controller=None, session_manager=None,
+                 access_mode="full"):
         """
         Initialize the main game screen.
 
@@ -150,6 +153,15 @@ class MainGameScreen:
         self.music_player = music_player
         self.app_controller = app_controller
         self.session_manager = session_manager
+        self.access_mode = access_mode          # "full" or "restricted" (calm features only)
+
+        # Music popup state. These must exist from the start: the 1-second music sync timer
+        # (_music_sync_tick) reads them long before the music window is ever opened.
+        self.music_window = None
+        self.music_library_body = None
+        self.music_library_note = None
+        self.music_stress_btn = None
+        self.music_track_buttons = []
 
         # UI scale factor: compensates for the DPI-awareness fix so that all
         # hardcoded pixel geometry (heights, widths, padx/pady) grows
@@ -207,6 +219,9 @@ class MainGameScreen:
 
             if hasattr(self.app_controller, 'session_manager'):
                 self.app_controller.session_manager.set_ui_callback(self.update_session_ui)
+
+            # Start music sync tick
+            self._music_sync_after_id = self.parent.after(1000, self._music_sync_tick)
 
         except Exception as e:
             import traceback
@@ -286,6 +301,137 @@ class MainGameScreen:
                 import traceback
                 traceback.print_exc()
     
+    def _open_breathing_exercise(self):
+        """Open the pet-guided breathing exercise."""
+        try:
+            from screens.breathing_exercise import open_breathing_exercise
+            from graphics.pet_graphics import pet_graphics
+            open_breathing_exercise(
+                self.parent, self.colors, self.s,
+                self.app_state.get_current_pet(), pet_graphics,
+            )
+        except Exception as e:
+            print(f"Error opening breathing exercise: {e}")
+
+    def _apply_stress_result(self, state=None, source="diagnosis"):
+        """Feed a finished diagnosis into the music stress filter (the latest result wins)."""
+        try:
+            state = state or self.stress_diagnosis_state
+            if state is None or not state.has_any():
+                return
+            self.set_user_stressed(state.is_stressed(), source)
+        except Exception as e:
+            print(f"Error applying stress result: {e}")
+
+    def open_diagnosis(self):
+        """Top-bar Diagnosis: scan + quiz, scored on its own (not mixed with the mailbox)."""
+        from screens.diagnosis_flow import DiagnosisWizard
+        from graphics.pet_graphics import pet_graphics
+        state = StressDiagnosisState()
+        DiagnosisWizard(
+            self.parent, self.colors, self.s,
+            state, self.app_state.get_current_pet(),
+            on_result=lambda: self._on_diagnosis_result(state),
+            pet_graphics=pet_graphics,
+        )
+
+    def open_stress_mailbox(self):
+        """Top-bar Mailbox: letter only, scored on its own (not mixed with the diagnosis)."""
+        from screens.stress_mailbox import StressMailboxWindow
+        from graphics.pet_graphics import pet_graphics
+        state = StressDiagnosisState()
+        StressMailboxWindow(
+            self.parent, self.colors, self.s,
+            state, self.app_state.get_current_pet(), pet_graphics,
+            on_result=lambda: self._on_mailbox_result(state),
+        )
+
+    def _on_diagnosis_result(self, state):
+        self._apply_stress_result(state, "diagnosis")
+        # A calm diagnosis lifts the "relax" mode that a hard start-up can cause.
+        if getattr(self, "access_mode", "full") == "restricted" and not state.is_stressed():
+            self._set_access_mode("full")
+            try:
+                NotificationManager.notify("Welcome back", "You're feeling calmer - everything is unlocked again.")
+            except Exception:
+                pass
+
+    def _on_mailbox_result(self, state):
+        self._apply_stress_result(state, "mailbox")
+
+    # === Access mode: "full" or "restricted" (calm features only) ===
+    def _apply_access_mode(self):
+        """Show or hide the study features according to self.access_mode."""
+        try:
+            if getattr(self, "access_mode", "full") == "restricted":
+                self._hide_restricted_features()
+                self._show_relax_banner()
+            else:
+                self._show_restricted_features()
+                self._hide_relax_banner()
+        except Exception as e:
+            print(f"Error applying access mode: {e}")
+
+    def _set_access_mode(self, mode):
+        self.access_mode = mode
+        self._apply_access_mode()
+
+    def _hide_restricted_features(self):
+        """Restricted mode keeps: pet, playground, pet status, pet chat, music, minigame,
+        diagnosis, mailbox, settings. Hidden: Tasks button, Study Timer panel, timer progress."""
+        if getattr(self, "_restricted_hidden", False):
+            return
+        tasks_btn = getattr(self, "nav_button_widgets", {}).get("\U0001F4C5 Tasks")
+        if tasks_btn is not None:
+            tasks_btn.pack_forget()
+        if hasattr(self, "timer_container"):
+            self.timer_container.place_forget()
+        if hasattr(self, "taskbar_timer_progress"):
+            self.taskbar_timer_progress.master.pack_forget()
+        self._restricted_hidden = True
+
+    def _show_restricted_features(self):
+        if not getattr(self, "_restricted_hidden", False):
+            return
+        widgets = getattr(self, "nav_button_widgets", {})
+        tasks_btn = widgets.get("\U0001F4C5 Tasks")
+        music_btn = widgets.get("\U0001F3B5 Music")
+        if tasks_btn is not None:
+            kw = dict(side="left", padx=self.s(8), pady=self.s(6))
+            if music_btn is not None:
+                kw["before"] = music_btn
+            tasks_btn.pack(**kw)
+        if hasattr(self, "timer_container"):
+            self.timer_container.place(relx=1.0, x=-self.s(720), y=self.s(60), relwidth=0.23, relheight=0.05)
+        if hasattr(self, "taskbar_timer_progress"):
+            self.taskbar_timer_progress.master.pack(side="left", fill="x", expand=True, padx=self.s(10))
+        self._restricted_hidden = False
+
+    def _show_relax_banner(self):
+        if getattr(self, "relax_banner", None) is not None:
+            return
+        pet = self.app_state.get_current_pet()
+        name = getattr(pet, "name", "") or "your pet"
+        text = (f"\U0001F33F  Take it easy today. Stay here with {name} - breathe, listen to some music, "
+                "chat, play a little and just relax.\n"
+                "Run a new Diagnosis whenever you feel calmer.")
+        self.relax_banner = tk.Label(
+            self.frame, text=text, font=("Arial", 12, "bold"),
+            bg=self.colors["bg_secondary"], fg=self.colors["text_dark"],
+            padx=self.s(18), pady=self.s(10), justify="center", wraplength=self.s(900),
+        )
+        self.relax_banner.place(relx=0.5, rely=1.0, anchor="s", y=-self.s(90))
+        self.relax_banner.lift()
+
+    def _hide_relax_banner(self):
+        banner = getattr(self, "relax_banner", None)
+        if banner is not None:
+            try:
+                banner.destroy()
+            except Exception:
+                pass
+            self.relax_banner = None
+
     def cleanup(self):
         """
         Clean up all resources, timers, and references.
@@ -298,7 +444,15 @@ class MainGameScreen:
                     self.stop_study_timer()
                 except Exception as e:
                     print(f"Error in stop_study_timer: {e}")
-            
+
+            # Stop music sync tick
+            if hasattr(self, '_music_sync_after_id') and self._music_sync_after_id:
+                try:
+                    self.parent.after_cancel(self._music_sync_after_id)
+                except (tk.TclError, AttributeError):
+                    pass
+                self._music_sync_after_id = None
+
             # 2. Stop any background threads
             if hasattr(self, '_stop_drowsiness_detection'):
                 try:
@@ -438,6 +592,7 @@ class MainGameScreen:
     
     def _initialize_core_state(self) -> None:
         """Initialize core application state and theme."""
+        self.stress_diagnosis_state = StressDiagnosisState()
         # Developer mode state - load from settings if available
         self.developer_mode = False
         if hasattr(self, 'app_state') and hasattr(self.app_state, 'settings'):
@@ -490,7 +645,7 @@ class MainGameScreen:
     def _initialize_chat_state(self) -> None:
         """Initialize chat system state."""
         self.chat_interface = None
-        self.chat_locked = None  # Track whether chat is locked (EGG stage)
+        self.chat_locked = False  # Track whether chat is locked (EGG stage)
         self.chat_panel = None  # Reference to chat panel for dynamic updates
         self.speech_bubble_visible = False
         self.speech_bubble_image = None
@@ -500,7 +655,7 @@ class MainGameScreen:
         self.model_manager = ModelManager()
         current_pet = self.app_state.get_current_pet()
         pet_name = getattr(current_pet, 'name', 'StudyPet') if current_pet else 'StudyPet'
-        self.chatbot = ChatBot(pet_name=pet_name)
+        self.chatbot = ChatBot(pet_name=pet_name, server_url=f"http://127.0.0.1:{self.model_manager.port}")
 
         # Start server in background thread to avoid freezing UI during init
         threading.Thread(target=self.model_manager.start_server, daemon=True).start()
@@ -753,12 +908,14 @@ class MainGameScreen:
         nav_frame.place(x=0, y=0, relwidth=1.0, relheight=0.07)
 
         # Navigation buttons (NO dev button here - moved to settings)
+        self.nav_button_widgets = {}
         nav_buttons = [
             ("📅 Tasks", lambda: self.switch_tab("tasks")),
-            ("📊 Stats", lambda: self.switch_tab("stats")),
             ("🎵 Music", lambda: self.switch_tab("music")),
+            ("🎮 Minigame", lambda: self.start_minigame()),
+            ("🧪 Diagnosis", lambda: self.open_diagnosis()),
+            ("📮 Mailbox", lambda: self.open_stress_mailbox()),
             ("⚙️ Settings", lambda: self.switch_tab("settings")),
-            ("🎮 Minigame", lambda: self.start_minigame())
         ]
 
         for text, command in nav_buttons:
@@ -772,6 +929,7 @@ class MainGameScreen:
                 font=("Arial", 10, "bold")
             )
             btn.pack(side="left", padx=self.s(8), pady=self.s(6))
+            self.nav_button_widgets[text] = btn
 
         # Music controls removed from top bar to eliminate redundancy with Music panel
 
@@ -1073,6 +1231,10 @@ class MainGameScreen:
 
         # Force UI update
         self.parent.update_idletasks()
+
+        # The start-up check-in now happens on its own full screen BEFORE this screen
+        # (screens/stress_gate_screen.py); here we only apply its outcome.
+        self.parent.after(150, self._apply_access_mode)
 
     # === STUDY TIMER SYSTEM ===
     def start_study_session(self, duration_minutes=25):
@@ -2129,21 +2291,7 @@ class MainGameScreen:
     def update_chat_lock_state(self, force=False):
         """Refresh chat lock state based on current pet stage."""
         try:
-            current_pet = self.app_state.get_current_pet()
-            if not current_pet or not hasattr(current_pet, 'stage'):
-                return
-
-            stage_value = None
-            try:
-                if hasattr(current_pet.stage, 'value'):
-                    stage_value = current_pet.stage.value
-                else:
-                    stage_value = current_pet.stage
-            except Exception as e:
-                print(f"Warning: Error getting stage value: {e}")
-                return
-
-            should_lock = (stage_value == 1)
+            should_lock = False  # Egg stage no longer exists in gameplay
             self.chat_locked = should_lock # Update the state
             if force or self.chat_locked is None or should_lock != self.chat_locked:
                 self.refresh_chat_ui()
@@ -2326,10 +2474,21 @@ class MainGameScreen:
         """Get response from the AI backend and update the UI."""
         print(f"[ChatBot] Processing request: {text}")
         try:
+            # llama-server may still be loading right after launch: wait for it (background thread only)
+            mm = getattr(self, "model_manager", None)
+            if mm is not None and not mm.is_server_running():
+                self.parent.after(0, lambda: self.append_message("Pet", "Waking up... one moment! Muuu~"))
+                waited = 0
+                while waited < 45 and getattr(self, "model_manager", None) is not None \
+                        and not self.model_manager.is_server_running():
+                    time.sleep(1.0)
+                    waited += 1
+
             # Ensure pet name is up to date in the bot
             current_pet = self.app_state.get_current_pet()
             pet_name = getattr(current_pet, 'name', 'StudyPet') if current_pet else 'StudyPet'
             self.chatbot.update_pet_name(pet_name)
+
 
             print(f"[ChatBot] Requesting prediction from bot (Pet Name: {pet_name})...")
             response = self.chatbot.predict(text)
@@ -2586,16 +2745,47 @@ class MainGameScreen:
         except AttributeError:
             pass
 
+    def _widget_alive(self, w):
+        """Check if a widget is not None and still exists in the Tkinter window hierarchy."""
+        if w is None:
+            return False
+        try:
+            return w.winfo_exists()
+        except (tk.TclError, AttributeError):
+            return False
+
     def show_music_player(self):
         """Show music player controls in a popup."""
         from src.ui.pet_theme import apply_pet_theme
         from ui.simple_theme import simple_theme
 
+        # Window Caching: if window already exists, lift it and return
+        if hasattr(self, 'music_window') and self.music_window and self.music_window.winfo_exists():
+            self.music_window.lift()
+            self.music_window.focus_force()
+            return
+
+        # Refresh library and sync before creating window
+        self.music_player.refresh_library()
+        self.music_player.sync_library()
+
         apply_pet_theme(app_state=self.app_state)
         colors = simple_theme.colors
 
         music_window = tk.Toplevel(self.parent)
+        self.music_window = music_window
         music_window.title("🎵 Music Player")
+
+        # Cleanup when window is destroyed
+        def _cleanup_music_window(event=None):
+            if event and event.widget != music_window:
+                return
+            self.music_window = None
+            self.music_library_body = None
+            self.music_library_note = None
+            self.music_stress_btn = None
+            self.music_track_buttons = []
+        music_window.bind("<Destroy>", _cleanup_music_window)
 
         # Calculate size relative to parent
         parent_w = self.parent.winfo_width() if self.parent.winfo_width() > 1 else 1280
@@ -2679,10 +2869,10 @@ class MainGameScreen:
         # Enable mousewheel scrolling
         def _on_mousewheel(event):
             main_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-        
+
         def _bind_mousewheel(event):
             main_canvas.bind_all("<MouseWheel>", _on_mousewheel)
-        
+
         def _unbind_mousewheel(event):
             main_canvas.unbind_all("<MouseWheel>")
 
@@ -2787,29 +2977,34 @@ class MainGameScreen:
         tracks_frame = ttk.LabelFrame(controls_frame, text="Track Library", padding=15, style="Music.TLabelframe")
         tracks_frame.pack(fill="both", expand=True, pady=(0, 14), anchor="center")
 
-        available_tracks = self.music_player.get_available_tracks()
-        if available_tracks:
-            # Store references so we can update the "✓" indicator live
-            self.music_track_buttons = []
-            for i, track in enumerate(available_tracks):
-                track_frame = tk.Frame(tracks_frame, bg=colors.get("bg_main", "#FFFFFF"))
-                track_frame.pack(fill="x", pady=2, anchor="center")
+        # Footer for library
+        library_footer = tk.Frame(tracks_frame, bg=colors.get("bg_main", "#FFFFFF"))
+        library_footer.pack(side="bottom", fill="x")
 
-                current_track = self.music_player.get_current_track_info()
-                is_current = current_track and current_track.get('name') == track['name']
+        self.music_library_note = tk.Label(
+            library_footer,
+            text="",
+            bg=colors.get("bg_main", "#FFFFFF"),
+            fg=colors.get("text_medium", "#666666"),
+            font=("Arial", 9)
+        )
+        self.music_library_note.pack(side="left", padx=(0, 10))
 
-                btn_text = f"🎵 {track['name']}" + ("  ✓" if is_current else "")
-                track_button = create_rounded_button(
-                    track_frame,
-                    text=btn_text,
-                    command=lambda idx=i: self.select_track_and_update(idx),
-                    radius=12,
-                    padding=(self.s(8),  self.s(4)),
-                    font=("Arial", 9),
-                    style="secondary"
-                )
-                track_button.pack(fill="x")
-                self.music_track_buttons.append((i, track_button, track['name']))
+        create_rounded_button(
+            library_footer,
+            text="➕ Add Track",
+            command=self._add_track_from_dialog,
+            radius=12,
+            padding=(self.s(8), self.s(4)),
+            font=("Arial", 9, "bold"),
+            style="accent"
+        ).pack(side="right")
+
+        # Library body
+        self.music_library_body = tk.Frame(tracks_frame, bg=colors.get("bg_main", "#FFFFFF"))
+        self.music_library_body.pack(fill="both", expand=True)
+
+        self._rebuild_music_library()
 
         # Close button
         close_btn_frame = tk.Frame(controls_frame, bg=colors.get("bg_main", "#FFFFFF"))
@@ -2824,11 +3019,122 @@ class MainGameScreen:
             style="primary"
         ).pack()
 
-    def select_track_and_update(self, track_index):
-        """Select a track and immediately start playing it, then update UIs."""
-        if self.music_player.play_track(track_index):
-            self.update_music_displays()
-            self.update_music_button_states()
+    def _rebuild_music_library(self):
+        """Destroys and rebuilds the track list in the music window."""
+        body = getattr(self, 'music_library_body', None)
+        if not self._widget_alive(body):
+            return
+
+        # Get background color once before destroying children
+        try:
+            bg = body['bg']
+        except (tk.TclError, TypeError, KeyError):
+            bg = "#FFFFFF"
+
+        for widget in body.winfo_children():
+            widget.destroy()
+
+        available_tracks = self.music_player.get_available_tracks()
+        self.music_track_buttons = []
+
+        if not available_tracks:
+            empty_label = tk.Label(
+                body,
+                text="No tracks yet. Add one with the button below, or drop audio files into the bgm folder.",
+                bg=bg,
+                fg="#666666",
+                font=("Arial", 9, "italic"),
+                wraplength=300
+            )
+            empty_label.pack(pady=20, anchor="center")
+        else:
+            for i, track in enumerate(available_tracks):
+                track_frame = tk.Frame(body, bg=bg)
+                track_frame.pack(fill="x", pady=2, anchor="center")
+
+                current_track = self.music_player.get_current_track_info()
+                is_current = current_track and current_track.get('name') == track['name']
+
+                btn_text = f"🎵 {track['name']}" + ("  ✓" if is_current else "")
+                track_button = create_rounded_button(
+                    track_frame,
+                    text=btn_text,
+                    command=lambda idx=i: self.select_track_and_update(idx),
+                    radius=12,
+                    padding=(self.s(8), self.s(4)),
+                    font=("Arial", 9),
+                    style="secondary"
+                )
+                track_button.pack(fill="x")
+                self.music_track_buttons.append((i, track_button, track['name']))
+
+        # Update the library note (hidden tracks count)
+        note = getattr(self, 'music_library_note', None)
+        if self._widget_alive(note):
+            note_text = ""
+            pending = self.music_player.analysis_pending_count()
+            if pending > 0:
+                suffix = f" · analysing {pending}…"
+                note_text += (" " if note_text else "") + suffix
+
+            note.config(text=note_text)
+
+    def _music_sync_tick(self):
+        """Poll music player for library changes and refresh UI if needed."""
+        try:
+            if self.music_player.sync_library():
+                # Library changed (tracks hidden/revealed or current track swapped)
+                self.update_music_displays()
+                self.update_music_button_states()
+                if self.music_window and self.music_window.winfo_exists():
+                    self._rebuild_music_library()
+        except Exception as e:
+            print(f"Error in _music_sync_tick: {e}")
+        finally:
+            # Schedule next tick only if parent still exists
+            try:
+                self._music_sync_after_id = self.parent.after(1000, self._music_sync_tick)
+            except tk.TclError:
+                pass
+
+    def set_user_stressed(self, is_stressed, source="ui"):
+        """Single entry point to update user stress state and trigger music player response."""
+        try:
+            # Update music player stress mode
+            self.music_player.set_stress_mode(is_stressed)
+
+            # Immediate UI refresh if window is open
+            if self.music_window and self.music_window.winfo_exists():
+                self._rebuild_music_library()
+                self.update_music_displays()
+                self.update_music_button_states()
+
+            # Log change
+            print(f"User stress state changed to {is_stressed} via {source}")
+        except Exception as e:
+            print(f"Error in set_user_stressed: {e}")
+
+    def _add_track_from_dialog(self):
+        """Open file dialog to import a new music track."""
+        try:
+            file_path = filedialog.askopenfilename(
+                parent=self.music_window,
+                title="Select Music Track",
+                filetypes=[("Audio Files", "*.mp3 *.wav *.ogg *.m4a"), ("All Files", "*.*")]
+            )
+            if not file_path:
+                return
+
+            success, message, track_name = self.music_player.import_track(file_path)
+            if success:
+                msg = f"Successfully added: {track_name}"
+                messagebox.showinfo("Track Added", msg, parent=self.music_window)
+                self._rebuild_music_library()
+                self.update_music_displays()
+            else:
+                messagebox.showwarning("Import Failed", message, parent=self.music_window)
+        except Exception as e:
+            messagebox.showerror("Error", f"An unexpected error occurred: {e}", parent=self.music_window)
 
     def toggle_music_and_update(self):
         """Toggle music in player window and refresh buttons."""
@@ -3111,9 +3417,9 @@ class MainGameScreen:
             
             stage = simpledialog.askinteger(
                 "Set Pet Stage",
-                f"Enter stage (1-5):\n1. Egg\n2. Baby\n3. Child\n4. Grown\n5. Battle Fit\n\nCurrent: {current_stage.name.replace('_', ' ').title()} ({current_stage.value})",
+                f"Enter stage (2-5):\n2. Baby\n3. Child\n4. Grown\n5. Battle Fit\n\nCurrent: {current_stage.name.replace('_', ' ').title()} ({current_stage.value})",
                 parent=self.parent,
-                minvalue=1,
+                minvalue=2,
                 maxvalue=5
             )
             

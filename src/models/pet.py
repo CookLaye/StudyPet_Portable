@@ -147,7 +147,7 @@ class Pet:
                 os.path.dirname(__file__), 
                 '..', '..', 'game_data', 'pets.json'
             )
-            with open(data_path, 'r') as f:
+            with open(data_path, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except FileNotFoundError:
             # Return default data if file doesn't exist

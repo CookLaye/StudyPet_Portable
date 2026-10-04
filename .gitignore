@@ -1,0 +1,40 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.pytest_cache/
+
+# ---- Created by the launcher / the app on a player's machine (never commit) ----
+# uv, the standalone Python manager (project-root bin/ only)
+/bin/
+# AI model (~0.8 GB), llama-server backend, server.log, server.pid
+assets/models/gpt_pet/
+*.gguf
+*.part
+
+# ---- Personal / local-only ----
+# save file, backups and runtime backup
+user_data/
+# developer mode switch: its mere presence turns dev mode on
+/dev_mode.key
+
+# ---- Music is not published (the placeholder file in bgm/ stays tracked) ----
+bgm/*.mp3
+bgm/*.wav
+bgm/*.ogg
+
+# ---- OS / IDE ----
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# ---- Face-scan models: downloaded at launch; baseline.json is personal calibration data ----
+assets/models/stress/
+
+# ---- ...except the default tracks, which ship with the app ----
+!bgm/default_1.*
+!bgm/default_2.*
+!bgm/default_3.*

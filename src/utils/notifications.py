@@ -5,6 +5,8 @@ Handles system-level toast notifications via plyer and standard UI dialogs via t
 import tkinter as tk
 from tkinter import messagebox
 from plyer import notification as plyer_notify
+import subprocess
+import sys
 import threading
 
 class NotificationManager:
@@ -23,6 +25,15 @@ class NotificationManager:
         """
         def _fire():
             try:
+                if sys.platform == "darwin":
+                    # STUDYPET-LAUNCHER-FIX: plyer needs the pyobjus package on macOS (not installed), so
+                    # use the notification command that ships with every Mac instead.
+                    def esc(value):
+                        return str(value).replace("\\", "\\\\").replace('"', '\\"')
+                    shown_title = title if title else NotificationManager.APP_NAME
+                    script = f'display notification "{esc(message)}" with title "{esc(shown_title)}"'
+                    subprocess.run(["osascript", "-e", script], check=False, timeout=5)
+                    return
                 plyer_notify.notify(
                     title=title if title else NotificationManager.APP_NAME,
                     message=message,

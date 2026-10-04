@@ -27,14 +27,14 @@ requests.get = _patched_get
 
 
 class ChatBot:
-    def __init__(self, server_url="http://127.0.0.1:8080", pet_name="StudyPet"):
+    def __init__(self, server_url=None, pet_name="StudyPet"):
         """
         Initialize the chatbot client.
         Args:
             server_url (str): The address of the local llama-server.
             pet_name (str): The name of the pet to use in the system prompt.
         """
-        self.server_url = server_url
+        self.server_url = server_url or "http://127.0.0.1:8080"
         self.pet_name = pet_name
 
         # Conversation history to provide context (stored in English)

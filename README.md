@@ -23,31 +23,47 @@ StudyPet utilizes a high-performance, lightweight AI architecture optimized for 
 - **Bilingual Engine**: A "Hub-and-Spoke" translation wrapper that processes inputs in English for maximum model coherence and translates responses back to the user's language with a custom pronoun-polishing layer for Vietnamese.
 
 ### Core Tech
-- **Language**: Python 3.x (Managed by `uv` for zero-setup)
+- **Language**: Python 3.13 (Managed by `uv` for zero-setup)
 - **GUI**: Tkinter
 - **Audio**: Pygame
-- **Computer Vision**: OpenCV & Keras (for drowsiness detection)
+- **Computer Vision**: OpenCV, MediaPipe & ONNX Runtime (facial stress scan)
 
 ## 🚀 Getting Started (Zero-Setup)
 
 StudyPet now uses a standalone environment manager (`uv`) to ensure it runs on any device without requiring you to manually install Python or configure system paths.
+
+**Requirements**
+- The launchers set everything up automatically; **first launch needs internet** and downloads a ~0.8 GB model; later launches work offline (English chat; Vietnamese needs internet for translation).
+- Python **3.13** is installed automatically by the launcher (no manual Python install).
+- No C++ compiler / CUDA is needed; Windows uses the CPU build. The facial stress scan needs an Apple Silicon Mac (M1 or newer) on macOS 14 or newer; on other Macs StudyPet still runs, but without the face scan.
+- Developers: `uv pip install -r requirements-dev.txt`.
 
 ### 🪟 Windows Setup
 1. **Clone the repository** or download the portable folder.
 2. **Run `start_windows.bat`**.
    - The script will automatically download `uv` (a fast Python manager).
    - It creates a standalone Python virtual environment in the `.venv` folder.
-   - It installs all dependencies and the `llama-cpp-python` build tools.
+   - It installs all dependencies.
    - It downloads the `llama-server` binary and the AI model.
    - Finally, it launches the application.
 
 ### 🍎 macOS Setup
 1. **Clone the repository** or download the portable folder.
-2. **Run `start_mac.sh`** (you may need to run `chmod +x start_mac.sh` first).
+2. **Double-click `start_mac.command`** (or run `bash start_mac.sh` in Terminal). The first time, macOS may ask to let Terminal use the camera: click Allow.
    - The script detects your Mac's architecture (Intel or Apple Silicon).
    - It downloads `uv` and sets up a standalone Python environment.
    - It downloads the pre-compiled `llama-server` binary specifically for your Mac.
    - It downloads the AI model and launches the application.
+
+## ❓ Troubleshooting
+- *Chat says it can't reach its brain:* open `assets/models/gpt_pet/server.log` (in the project folder) and read the last lines.
+- *Windows, log/console shows exit code 3221225781 (0xC0000135):* install the Microsoft Visual C++ Redistributable (x64) from https://aka.ms/vc14/vc_redist.x64.exe , restart Windows, start StudyPet again.
+- *Windows, exit code 3221225501 (0xC000001D):* the CPU is too old for the AI server build; the rest of StudyPet still works.
+- *Repair everything:* close StudyPet, delete the `.venv` folder and the `assets/models/gpt_pet/bin` folder, run the launcher again (the model file is kept).
+- *Camera does not start:* run `.venv/bin/python -m stress_scan.camera_check` (macOS) or `.venv\Scripts\python.exe -m stress_scan.camera_check` (Windows) from the project folder and send the output. Also close other apps using the camera (Zoom, Teams, browser tabs) and check the OS camera privacy settings.
+- *Model download fails:* the console prints the real error for each attempt. Common causes: no internet, a VPN/proxy/antivirus inspecting HTTPS, or a wrong system date.
+- *Face scan libraries could not be installed:* expected on Intel Macs and macOS 13 or older; the rest of StudyPet works.
+- *Something else uses port 8080:* nothing to do — StudyPet picks a free port by itself.
 
 ## 📁 Project Structure
 - `src/`: Main source code.
