@@ -79,6 +79,7 @@ from src.models.pet import PetType, Pet  # Import Pet class for pet creation
 from src.utils.music_player import MusicPlayer
 from src.ui.simple_theme import simple_theme
 from src.utils.session_manager import SessionManager
+from src.utils.model_manager import ModelManager
 
 # Application constants
 DEFAULT_WINDOW_TITLE = "StudyPet"
@@ -117,8 +118,21 @@ class VirtualPetStudyApp:
         session_manager: User session data manager
     """
 
+
+    def set_latest_stress(self, state, source):
+        """Update the latest stress state from a source."""
+        try:
+            if state and hasattr(state, 'level'):
+                lvl = state.level()
+                self.latest_stress = {"level_key": lvl.key, "score": state.rounded_average(), "source": source}
+        except Exception:
+            pass
     def __init__(self):
         """Initialize the StudyPet application."""
+        self.latest_stress = None
+        self._open_session_id = None     # this launch's entry in the session log (progress_log)
+        self._exit_prompt = None
+        self._closing = False
         # Initialize main window
         self.root = tk.Tk()
         self.root.title(DEFAULT_WINDOW_TITLE)
@@ -141,6 +155,7 @@ class VirtualPetStudyApp:
         self.music_player.play_random_default()
         self.music_player.queue_analysis_for_library()
         self.session_manager = self._initialize_session_manager()
+        self.model_manager = None
 
         # Start with greeting screen
         self.current_screen = None
@@ -380,6 +395,7 @@ class VirtualPetStudyApp:
             print(f"Warning: hatch check failed: {e}")
 
         # Stress check-in: the main screen stays hidden until it is done (once per launch)
+        self.ensure_ai_server()
         if not getattr(self, "_stress_gate_done", False):
             return self.show_stress_gate()
 
@@ -421,6 +437,7 @@ class VirtualPetStudyApp:
             self.current_screen = StressGateScreen(
                 self.root, self.app_state, self.music_player,
                 on_finished=self._on_stress_gate_finished,
+                model_manager=self.model_manager,
             )
             self.root.update_idletasks()
             return self.current_screen
@@ -432,9 +449,14 @@ class VirtualPetStudyApp:
             self._stress_gate_done = True
             return self.show_main_game()
 
-    def _on_stress_gate_finished(self, access_mode="full"):
+    def _on_stress_gate_finished(self, access_mode="full", state=None):
         """Called by the gate: 'full' or 'restricted'."""
+        # the gate calls on_finished(access_mode); its final state is read from the (still current) gate screen
+        self.set_latest_stress(state or getattr(self.current_screen, "state", None), "gate")
         self._stress_gate_done = True
+        sid = getattr(self.current_screen, "session_id", None)     # gate screen is still current here
+        if sid is not None:
+            self._open_session_id = sid
         self.show_main_game(access_mode=access_mode)
 
     def _update_window_title_with_pet(self) -> None:
@@ -455,9 +477,38 @@ class VirtualPetStudyApp:
         Routes to appropriate screen based on whether user is first-time.
         """
         if self.app_state.is_first_time_user():
-            self.show_pet_selection()
+            # First run (no pet yet): show the instruction slideshow, THEN pet selection.
+            self._show_instructions_then(self.show_pet_selection)
         else:
             self.show_main_game()
+
+    def _show_instructions_then(self, next_step) -> None:
+        """Show the first-run instruction slideshow, then call next_step().
+
+        Never strands the user: if the slides are missing or anything fails,
+        next_step() is called immediately. Ignores repeat START clicks while open.
+        """
+        if getattr(self, "_instructions_open", False):
+            return
+        try:
+            from src.screens.instructions_slideshow import (
+                InstructionsSlideshow, find_slide_paths, get_instructions_dir)
+            paths = find_slide_paths(get_instructions_dir())
+            if not paths:
+                next_step()
+                return
+            self._instructions_open = True
+
+            def _done():
+                self._instructions_open = False
+                next_step()
+
+            InstructionsSlideshow(self.root, on_finish=_done, slide_paths=paths)
+        except Exception as e:
+            self._instructions_open = False
+            print(f"Warning: instruction slideshow failed ({e}); continuing")
+            import traceback; traceback.print_exc()
+            next_step()
 
     def handle_pet_selected(self, pet_type: PetType, pet_name: str) -> None:
         """Handle pet selection and transition to main game screen.
@@ -598,7 +649,7 @@ class VirtualPetStudyApp:
         # Show confirmation dialog
         if not NotificationManager.confirm(
             "Reset Application",
-            "Are you sure you want to reset the application?\n"
+            "Are you sure you want to reset the application?\r\n"
             "All your data will be permanently deleted and the pet will be reset to its initial state."
         ):
             return False
@@ -667,7 +718,7 @@ class VirtualPetStudyApp:
                 if not self.app_state.reset_data():
                     NotificationManager.warn(
                         "Reset Warning",
-                        "Some data may not have been fully reset.\n"
+                        "Some data may not have been fully reset.\r\n"
                         "The application will continue with a fresh state."
                     )
 
@@ -732,8 +783,8 @@ class VirtualPetStudyApp:
             traceback.print_exc()
             NotificationManager.error(
                 "Reset Error",
-                "An error occurred while resetting the application.\n"
-                f"Error: {str(e)}\n"
+                "An error occurred while resetting the application.\r\n"
+                f"Error: {str(e)}\r\n"
                 "Please restart the application."
             )
             return False
@@ -756,13 +807,18 @@ class VirtualPetStudyApp:
             y = (self.root.winfo_screenheight() // 2) - (800 // 2)
             self.root.geometry(f"{DEFAULT_FULLSCREEN_SIZE}+{x}+{y}")
 
-    def _on_close(self) -> None:
+    def _on_close(self, prompt: bool = True) -> None:
         """Handle application close event with proper cleanup.
 
         Saves pet state only when closing from main game screen to prevent
         unnecessary saves from other screens. Cleans up all resources.
         """
         print("[REPRO] VirtualPetStudyApp._on_close called")
+        if self._closing:
+            return
+        if prompt and self._ask_exit_emotion():
+            return              # the prompt is open; its answer calls _on_close(prompt=False)
+        self._closing = True
         try:
             # Save pet state if on main game screen
             self._save_pet_state_on_close()
@@ -778,6 +834,55 @@ class VirtualPetStudyApp:
         finally:
             # Close application - MUST always happen
             self._shutdown_application()
+
+    def _ask_exit_emotion(self) -> bool:
+        """Open the 'Before you go' four-face prompt. True = prompt is (now) open, so do not close yet.
+        Only when this launch has a session in the log; any problem -> False (just close)."""
+        if self._exit_prompt is not None:
+            try:
+                self._exit_prompt.win.lift()
+            except Exception:
+                pass
+            return True
+        if self._open_session_id is None:
+            return False
+        try:
+            pet = self.app_state.get_current_pet()
+            if pet is None:
+                return False
+            from ui.simple_theme import simple_theme
+            from ui.pet_theme import apply_pet_theme
+            from graphics.pet_graphics import pet_graphics
+            from screens.exit_emotion_prompt import ExitEmotionPrompt
+            apply_pet_theme(app_state=self.app_state)
+            try:
+                scale = self.root.winfo_fpixels('1i') / 96.0
+            except Exception:
+                scale = 1.0
+            s = lambda px: max(1, round(px * scale))
+            self._exit_prompt = ExitEmotionPrompt(
+                self.root, simple_theme.colors, s, pet, pet_graphics,
+                on_done=self._exit_emotion_done)
+            return True
+        except Exception as e:
+            print(f"Could not show the exit prompt: {e}")
+            self._exit_prompt = None
+            return False
+
+    def _exit_emotion_done(self, emotion_key) -> None:
+        """Store the face picked on exit (hidden score) in the session log, then really close."""
+        self._exit_prompt = None
+        try:
+            from utils import progress_log
+            from utils.stress_diagnosis import score_emotion
+            score = score_emotion(emotion_key) if emotion_key else None
+            progress_log.end_session(
+                self.app_state.settings, self.app_state.set_setting,
+                self._open_session_id, emotion_key, score)
+        except Exception as e:
+            print(f"Could not log session end: {e}")
+        self._open_session_id = None
+        self._on_close(prompt=False)
 
     def _save_pet_state_on_close(self) -> None:
         """Save pet state and application data on close."""
@@ -816,6 +921,13 @@ class VirtualPetStudyApp:
             except Exception as e:
                 print(f"⚠️ Error stopping music player: {e}")
 
+        try:
+            if self.model_manager:
+                self.model_manager.stop_server()
+            self.model_manager = None
+        except Exception as e:
+            print(f"Error stopping AI server during cleanup: {e}")
+
     def _shutdown_application(self) -> None:
         """Safely shutdown the application."""
         try:
@@ -831,16 +943,33 @@ class VirtualPetStudyApp:
             self.root.mainloop()
         except KeyboardInterrupt:
             try:
-                self._on_close()
+                self._on_close(prompt=False)
             except KeyboardInterrupt:
                 # If interrupted again during cleanup, force exit
                 os._exit(0)
         except Exception as e:
             print(f"Unexpected error: {e}")
             try:
-                self._on_close()
+                self._on_close(prompt=False)
             except Exception:
                 os._exit(0)
+
+
+    def ensure_ai_server(self):
+        """Create the shared ModelManager and start the AI server once, in the background."""
+        if self.model_manager is None:
+            try:
+                self.model_manager = ModelManager()
+            except Exception as e:
+                print(f"AI Server setup failed: {e}")
+                return
+        if getattr(self, "_ai_start_thread", None) is not None:
+            return                      # already started this session
+        print("Starting AI server in the background...")
+        import threading
+        self._ai_start_thread = threading.Thread(target=self.model_manager.start_server, daemon=True)
+        self._ai_start_thread.start()
+
 
 def main() -> None:
     """Main entry point for the StudyPet application."""

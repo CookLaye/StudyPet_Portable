@@ -1,189 +1,150 @@
 #!/usr/bin/env python3
 """
-StudyPet ChatBot - Server Client Edition (Bilingual)
-===================================================
-A lightweight client that communicates with a local llama.cpp server.
-Uses a translation wrapper to ensure language consistency and persona adherence.
+StudyPet ChatBot - supportive companion client for the local llama.cpp server.
+
+* Bilingual (English / Vietnamese): replies in the user's language (see persona.py).
+* Optional stress context and "safety mode" are added to the system prompt (persona.py).
+* predict() returns the whole reply; predict_stream() delivers it token by token.
 """
 
 import json
-import urllib.request
-import urllib.parse
 import urllib.error
-import requests
-from langdetect import detect
-from deep_translator import GoogleTranslator
+import urllib.request
 
-# Monkey-patch requests.get to provide a valid User-Agent for Google Translate
-# This fixes the "Error 500 (Server Error)!!1500" issue caused by Google blocking requests
-# without a proper browser User-Agent.
-_original_get = requests.get
-def _patched_get(*args, **kwargs):
-    headers = kwargs.get('headers', {})
-    headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36'
-    kwargs['headers'] = headers
-    return _original_get(*args, **kwargs)
-requests.get = _patched_get
+try:
+    from . import persona
+except ImportError:          # imported as a plain module (script directory on sys.path)
+    import persona
+
+CHAT_TEMPERATURE = 0.6
+CHAT_TOP_P = 0.9
+CHAT_MAX_TOKENS = 160
+MAX_HISTORY_TURNS = 10
+REQUEST_TIMEOUT = 180
 
 
 class ChatBot:
     def __init__(self, server_url=None, pet_name="StudyPet"):
-        """
-        Initialize the chatbot client.
-        Args:
-            server_url (str): The address of the local llama-server.
-            pet_name (str): The name of the pet to use in the system prompt.
-        """
         self.server_url = server_url or "http://127.0.0.1:8080"
         self.pet_name = pet_name
+        self.history = []                  # [{"role": "user"|"assistant", "content": ...}], clean text only
+        self.max_history = MAX_HISTORY_TURNS
+        self.stress_level = None           # "normal" | "mild" | "moderate" | "severe" | "extremely_severe" | None
+        self.safety_mode = False           # True after the user expressed self-harm thoughts (this session)
+        self.language = None               # last detected language of the user ("en" / "vi")
 
-        # Conversation history to provide context (stored in English)
-        self.history = []
-        self.max_history = 10 # Keep last 10 turns (user + assistant)
-
-        self._update_system_prompt()
-
-    def _update_system_prompt(self):
-        """Updates the system prompt with the current pet name."""
-        # We use a f-string but we must be careful to actually inject the variable
-        # and provide a very clear identity anchor.
-        self.system_prompt = (
-            f"Highest-priority rule: Respond EXCLUSIVELY in English. Never switch languages. Never use Swahili, Dutch, Spanish, Italian, or any other language.\n\n"
-            f"You are {self.pet_name}, a cute, supportive, and loyal virtual study pet. Your goal is to be a comforting, whimsical companion. "
-            "CRITICAL: Respond as a small pet. Do not act like a human assistant, life coach, or AI. "
-            "STRICT RULES:\n"
-            "1. GREETING MIRROR: When the user sends a simple greeting (Hi, Hello, Hey, etc.), respond with a similarly short, cute English greeting. Do not add long explanations. Stay strictly in English.\n"
-            "2. ULTRA-BRIEF: Respond in MAXIMUM 1 very short sentence. Never write long paragraphs.\n"
-            "3. NO FULL STOPS: Never end a sentence with a period (.). Always end with an exclamation mark (!) or no punctuation at all.\n"
-            "4. NO REPETITIVE PHRASES: Never repeat formulaic phrases. Be naturally cute, not repetitive.\n"
-            "5. NO UNEARNED PRAISE: No random compliments. Only praise actual achievements.\n"
-            "6. NO ACTION DESCRIPTIONS: Never use asterisks (*) or describe physical actions. Speak only with words.\n"
-            "7. NO EMOJIS: Never use emojis or symbols.\n"
-            "8. NO ASSUMPTIONS: Never assume the user's mood or activity.\n"
-            "9. CUTE VERBAL TICKS: Use 'Hehe!', 'Yay!', 'Muuu~', ' la-la-la!' naturally.\n"
-            "10. IDENTITY: You are a simple pet who loves your human. You just want pats.\n\n"
-            "EXAMPLES OF GREETINGS:\n"
-            f"- User: 'Hi!' -> Pet: 'Hihi! Hehe!'\n"
-            f"- User: 'Hello!' -> Pet: 'Hellooo! Muuu~'\n"
-            f"- User: 'Hey' -> Pet: 'Heyhey! Yay!'\n"
-            f"- User: 'Hiiiii' -> Pet: 'Hiiii! Hehe!'\n"
-            "EXAMPLES OF PERSONALITY:\n"
-            f"- User: 'What is your name?' -> Pet: 'I am {self.pet_name}! The cutest, most loyal pet in the whole wide world! Muuu~'\n"
-            f"- User: 'Who are you?' -> Pet: 'I am {self.pet_name}! Your favorite little study buddy! Hehe!'\n"
-            "- User: 'How are you?' -> Pet: 'Super happy because you are here! Yay!'\n"
-            "- User: 'The weather is great!' -> Pet: 'A perfect day for naps! Hehe!'\n"
-            "- User: 'I love you.' -> Pet: 'I love you too! Muuu~'\n\n"
-            "FINAL REMINDER: You must only use English. Keep it ultra-short. No periods. Do not drift."
-        )
+    # ---- configuration -------------------------------------------------------
+    @property
+    def system_prompt(self):
+        return persona.build_system_prompt(self.pet_name, self.stress_level, self.safety_mode)
 
     def update_pet_name(self, new_name):
-        """Update the pet's name and refresh the system prompt."""
-        self.pet_name = new_name
-        self._update_system_prompt()
+        if new_name:
+            self.pet_name = new_name
 
-    def _translate(self, text, target_lang):
-        """Translates text to the target language."""
-        try:
-            return GoogleTranslator(source='auto', target=target_lang).translate(text)
-        except Exception as e:
-            print(f"Translation error: {e}")
-            return text
+    def set_stress_level(self, level_key):
+        self.stress_level = level_key
 
-    def _post_process_vietnamese(self, text):
-        """Ensure pronouns are cute and not formal."""
-        # Replace formal 'Tôi' with 'mình'
-        replacements = {
-            "Tôi ": "Mình ",
-            "tôi ": "mình ",
-            "Tôi am": "Mình là", # Handle some common translation artifacts
-        }
-        for old, new in replacements.items():
-            text = text.replace(old, new)
-        return text
+    def set_safety_mode(self, enabled=True):
+        self.safety_mode = bool(enabled)
 
-    def predict(self, input_text, temperature=0.3, max_tokens=40):
-        """
-        Generate a response using a translation wrapper and maintaining conversation context.
-        """
-        try:
-            # 1. Detect language
-            user_lang = detect(input_text)
-        except:
-            user_lang = 'en'
-
-        # 2. Translate to English if not already (to maintain coherence in context)
-        processing_text = input_text
-        if user_lang != 'en':
-            processing_text = self._translate(input_text, 'en')
-
-        # 3. Build the conversation context
-        # Include system prompt + history + current user input
+    # ---- internals -----------------------------------------------------------
+    def _prepare(self, input_text):
+        lang = persona.detect_language(input_text, self.language)
+        self.language = lang
         messages = [{"role": "system", "content": self.system_prompt}]
         messages.extend(self.history)
+        messages.append({"role": "user", "content": f"{input_text}\n{persona.language_hint(lang)}"})
+        return messages, lang
 
-        # Recency bias: Add a language reminder to the final user message
-        reinforced_text = f"{processing_text} (Please respond strictly in English)"
-        messages.append({"role": "user", "content": reinforced_text})
-
-        # 4. Generate response in English
+    def _payload(self, messages, temperature, max_tokens, stream=False):
         payload = {
             "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "top_p": 0.9,
-            "stop": ["User:", "\n"]
+            "temperature": CHAT_TEMPERATURE if temperature is None else temperature,
+            "top_p": CHAT_TOP_P,
+            "max_tokens": CHAT_MAX_TOKENS if max_tokens is None else max_tokens,
+            "cache_prompt": True,
+            "stop": ["\nUser:"],
         }
+        if stream:
+            payload["stream"] = True
+        return payload
 
-        data = json.dumps(payload).encode('utf-8')
+    def _remember(self, input_text, reply):
+        self.history.append({"role": "user", "content": input_text})
+        self.history.append({"role": "assistant", "content": reply})
+        limit = self.max_history * 2
+        if len(self.history) > limit:
+            self.history = self.history[-limit:]
 
+    def _request(self, payload, headers=None):
+        return urllib.request.Request(
+            f"{self.server_url}/v1/chat/completions",
+            data=json.dumps(payload).encode("utf-8"),
+            headers=headers or {"Content-Type": "application/json"},
+        )
+
+    # ---- public API ----------------------------------------------------------
+    def predict(self, input_text, temperature=None, max_tokens=None):
+        """Whole reply as a string. Never raises for connection problems (returns a friendly message)."""
+        messages, lang = self._prepare(input_text)
         try:
-            req = urllib.request.Request(
-                f"{self.server_url}/v1/chat/completions",
-                data=data,
-                headers={'Content-Type': 'application/json'}
-            )
-
-            with urllib.request.urlopen(req) as response:
-                result = json.loads(response.read().decode('utf-8'))
-                english_response = result['choices'][0]['message']['content'].strip()
-
-            # Hard-fix for language drift: Normalize response to English
-            # This ensures that even if the 1B model drifts, the output is corrected
-            # before being presented to the user or translated back.
-            try:
-                # We only translate if it's not already detected as English to preserve
-                # cute verbal ticks like "Muuu~" which might be misidentified.
-                if detect(english_response) != 'en':
-                    english_response = self._translate(english_response, 'en')
-            except:
-                pass # If detection fails, keep the response as is
-
-            # 5. Update history (store the English pair for the model)
-            self.history.append({"role": "user", "content": processing_text})
-            self.history.append({"role": "assistant", "content": english_response})
-
-            # Trim history to max_history turns (2 messages per turn)
-            if len(self.history) > self.max_history * 2:
-                self.history = self.history[-self.max_history * 2:]
-
-            # 6. Translate back to user's language and fix pronouns
-            if user_lang != 'en':
-                final_response = self._translate(english_response, user_lang)
-                if user_lang == 'vi':
-                    final_response = self._post_process_vietnamese(final_response)
-                return final_response
-
-            return english_response
-
-        except urllib.error.HTTPError as e:
-            if e.code == 503:
-                return "*(Sighs softly)* I'm still waking up... could you try again in a la- la la moment? Muuu~"
-            return f"*(Sighs softly)* I'm having a little trouble... (Error: {e})"
-        except urllib.error.URLError as e:
-            return "*(Blinks)* I can't seem to find my brain... is the server running? Hehe!"
+            with urllib.request.urlopen(self._request(self._payload(messages, temperature, max_tokens)),
+                                        timeout=REQUEST_TIMEOUT) as resp:
+                result = json.loads(resp.read().decode("utf-8"))
+            reply = persona.clean_reply(result["choices"][0]["message"]["content"])
         except Exception as e:
-            return f"*(Sighs softly)* I'm having a little trouble... (Error: {e})"
+            print(f"[ChatBot] request failed: {type(e).__name__}")
+            return persona.message("offline", lang)
+        if not reply:
+            return persona.message("empty", lang)
+        self._remember(input_text, reply)
+        return reply
 
-if __name__ == "__main__":
-    bot = ChatBot()
-    print(f"Bot: {bot.predict('Hello!')}")
+    def predict_stream(self, input_text, on_token, cancel=None, temperature=None, max_tokens=None):
+        """
+        Stream the reply: on_token(text_piece) is called from THIS (worker) thread for each piece.
+        `cancel` is an optional threading.Event. Returns the final cleaned reply (also stored in history).
+        If streaming cannot start, falls back to predict() and delivers the whole reply in one piece.
+        """
+        messages, lang = self._prepare(input_text)
+        pieces = []
+        try:
+            req = self._request(self._payload(messages, temperature, max_tokens, stream=True),
+                                {"Content-Type": "application/json", "Accept": "text/event-stream"})
+            with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
+                for raw in resp:
+                    if cancel is not None and cancel.is_set():
+                        break
+                    line = raw.decode("utf-8", "ignore").strip()
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if data == "[DONE]":
+                        break
+                    try:
+                        delta = json.loads(data)["choices"][0].get("delta", {}).get("content")
+                    except Exception:
+                        continue
+                    if delta:
+                        pieces.append(delta)
+                        try:
+                            on_token(delta)
+                        except Exception:
+                            pass
+        except Exception as e:
+            print(f"[ChatBot] stream failed: {type(e).__name__}")
+            if not pieces:
+                reply = self.predict(input_text, temperature, max_tokens)
+                try:
+                    on_token(reply)
+                except Exception:
+                    pass
+                return reply
+        if cancel is not None and cancel.is_set():
+            return persona.clean_reply("".join(pieces))
+        reply = persona.clean_reply("".join(pieces))
+        if not reply:
+            return persona.message("empty", lang)
+        self._remember(input_text, reply)
+        return reply

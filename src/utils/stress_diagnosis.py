@@ -75,6 +75,16 @@ QUIZ_RESPONSE_LABELS = [
     (3, "Hầu như luôn đúng"),
 ]
 
+# ---- Emotion scale (replaces the quiz on weeks when the DASS-21 is not due) ----
+# (pet emotion image name, score 0-42, English caption, Vietnamese caption)
+# Left-to-right display order = this order. Edit the numbers here only.
+EMOTION_SCALE = [
+    ("Happy",   5,  "Calm / happy",     "Bình yên, vui vẻ"),       # Normal band
+    ("Worried", 17, "A bit worried",    "Hơi lo lắng"),            # Mild band
+    ("Sad",     24, "Down / drained",   "Buồn, kiệt sức"),         # Moderate band
+    ("Angry",   32, "Tense / irritated","Căng thẳng, dễ cáu"),     # Severe band
+]
+
 
 # --------------------------------------------------------------------------
 # Scoring helpers (all return floats on the 0-42 scale, or None for "no score")
@@ -98,6 +108,13 @@ def score_quiz(answers):
     """answers: list of 7 ints, each 0-3. Official DASS-21 rule: sum x 2 -> 0-42."""
     return float(sum(answers) * 2)
 
+def score_emotion(emotion_key):
+    """emotion_key: 'Happy' | 'Worried' | 'Sad' | 'Angry' (case-insensitive). Returns float 0-42 or None if unknown."""
+    for key, score, _en, _vi in EMOTION_SCALE:
+        if key.lower() == str(emotion_key).lower():
+            return float(score)
+    return None
+
 
 def score_facial_scan(scan_result):
     """
@@ -120,6 +137,11 @@ def analyze_mailbox(letter_text):
     return result["score"], bool(result["crisis"])
 
 
+
+def analyze_mailbox_ai(letter_text, model_manager=None):
+    """Blocking. Returns (score 0-42, crisis_bool, info). Call from a background thread."""
+    from utils.mailbox_llm import analyze_letter
+    return analyze_letter(letter_text, analyze_mailbox, model_manager)
 def score_mailbox(letter_text):
     """Keyword-based score (English + Vietnamese) for the mailbox letter, 0-42."""
     return analyze_mailbox(letter_text)[0]
@@ -139,6 +161,7 @@ class StressDiagnosisState:
         self.facial_scan_score = None   # float 0-42 or None
         self.quiz_score = None          # float 0-42 or None
         self.mailbox_score = None       # float 0-42 or None
+        self.emotion_score = None   # float 0-42 or None
         self.mailbox_crisis = False     # True if the letter contained a self-harm/suicide phrase
 
     def components(self):
@@ -146,6 +169,7 @@ class StressDiagnosisState:
         pairs = [
             ("scan", self.facial_scan_score),
             ("quiz", self.quiz_score),
+            ("emotion", self.emotion_score),
             ("mailbox", self.mailbox_score),
         ]
         return [(name, v) for name, v in pairs if v is not None]
@@ -186,14 +210,16 @@ class StressDiagnosisState:
 # Shared result UI
 # --------------------------------------------------------------------------
 
-_COMPONENT_NAMES = {"scan": "Face scan", "quiz": "Quiz", "mailbox": "Mailbox"}
+_COMPONENT_NAMES = {"scan": "Face scan", "quiz": "Quiz", "emotion": "Mood", "mailbox": "Mailbox"}
 
-# Shown (only) when the mailbox letter contained a self-harm / suicide phrase.
-# 111 = Vietnam's national child protection hotline (free, 24/7, offers counselling).
-SUPPORT_TEXT = (
-    "If you ever feel unsafe or think about hurting yourself, please tell a trusted "
-    "adult right away. In Vietnam you can also call 111 (free, 24/7)."
-)
+def _support_text():
+    """Shown (only) when the mailbox letter contained a self-harm / suicide phrase.
+    The numbers live in src/data/support_resources.json (see utils/persona.py)."""
+    try:
+        from utils import persona
+        return persona.support_text_short("en")
+    except Exception:
+        return "If you ever feel unsafe or think about hurting yourself, please tell someone you trust right away."
 
 
 def render_result_panel(container, colors, s, stress_state, on_close, on_breathing=None,
@@ -262,7 +288,7 @@ def render_result_panel(container, colors, s, stress_state, on_close, on_breathi
 
     if getattr(stress_state, "mailbox_crisis", False):
         tk.Label(
-            container, text=SUPPORT_TEXT, font=fnt(9, True),
+            container, text=_support_text(), font=fnt(9, True),
             bg=colors["bg_main"], fg="#B03030",
             wraplength=wrap, justify="center",
         ).pack(pady=(0, s(8)))

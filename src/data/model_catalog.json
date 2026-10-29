@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "tiers": [
+    {
+      "id": "lite",
+      "label": "Lite",
+      "min_ram_gb": 0,
+      "filename": "Qwen2.5-1.5B-Instruct-Q4_K_M.gguf",
+      "url": "https://huggingface.co/bartowski/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/Qwen2.5-1.5B-Instruct-Q4_K_M.gguf",
+      "approx_mb": 940,
+      "context": 4096,
+      "license": "Apache 2.0"
+    },
+    {
+      "id": "standard",
+      "label": "Standard",
+      "min_ram_gb": 6,
+      "filename": "Qwen2.5-3B-Instruct-Q4_K_M.gguf",
+      "url": "https://huggingface.co/bartowski/Qwen2.5-3B-Instruct-GGUF/resolve/main/Qwen2.5-3B-Instruct-Q4_K_M.gguf",
+      "approx_mb": 1840,
+      "context": 4096,
+      "license": "Qwen Research License (non-commercial)"
+    },
+    {
+      "id": "plus",
+      "label": "Plus",
+      "min_ram_gb": 12,
+      "filename": "Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
+      "url": "https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/resolve/main/Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
+      "approx_mb": 2381,
+      "context": 4096,
+      "license": "Apache 2.0"
+    }
+  ],
+  "fallback_ram_gb": 8
+}

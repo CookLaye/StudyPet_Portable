@@ -23,13 +23,20 @@ import pygame
 # Local imports
 from ui.simple_theme import simple_theme, create_rounded_button
 from ui.rounded_widgets import RoundedPanel
+from ui.collapsible_panel import CollapsiblePanel
+from ui.panel_layout import compute_panel_slots
 from ui.unified_settings import show_unified_settings
 from ui.pet_theme import apply_pet_theme
 from ui.tasks_panel import TasksPanel
 from utils.notifications import NotificationManager
+from utils.focus_session import FocusSessionController
+from stress_scan.focus_tracker import FocusTracker
+from screens.focus_window import FocusWindow
 from utils.stress_diagnosis import StressDiagnosisState
 from utils.model_manager import ModelManager
 from utils.chatbot_utils import ChatBot
+from utils import persona, chat_actions
+from utils.stress_keywords import analyze_text
 from models.pet import PetStage, PetEmotion
 
 class CustomTimerDialog(tk.Toplevel):
@@ -158,6 +165,7 @@ class MainGameScreen:
         # Music popup state. These must exist from the start: the 1-second music sync timer
         # (_music_sync_tick) reads them long before the music window is ever opened.
         self.music_window = None
+        self.quiz_window = None
         self.music_library_body = None
         self.music_library_note = None
         self.music_stress_btn = None
@@ -320,6 +328,9 @@ class MainGameScreen:
             if state is None or not state.has_any():
                 return
             self.set_user_stressed(state.is_stressed(), source)
+            ctrl = getattr(self, "app_controller", None)
+            if ctrl is not None and hasattr(ctrl, "set_latest_stress"):
+                ctrl.set_latest_stress(state, source)
         except Exception as e:
             print(f"Error applying stress result: {e}")
 
@@ -333,6 +344,7 @@ class MainGameScreen:
             state, self.app_state.get_current_pet(),
             on_result=lambda: self._on_diagnosis_result(state),
             pet_graphics=pet_graphics,
+            app_state=self.app_state,
         )
 
     def open_stress_mailbox(self):
@@ -344,6 +356,7 @@ class MainGameScreen:
             self.parent, self.colors, self.s,
             state, self.app_state.get_current_pet(), pet_graphics,
             on_result=lambda: self._on_mailbox_result(state),
+            model_manager=getattr(self, "model_manager", None),
         )
 
     def _on_diagnosis_result(self, state):
@@ -360,6 +373,28 @@ class MainGameScreen:
         self._apply_stress_result(state, "mailbox")
 
     # === Access mode: "full" or "restricted" (calm features only) ===
+
+    def open_quiz(self):
+        """Top-bar Quiz: paste notes -> AI-written multiple-choice quiz. Study feature: locked in restricted mode."""
+        if getattr(self, "access_mode", "full") == "restricted":
+            NotificationManager.notify("Relax first", "Quizzes are unavailable while you are resting. Run a new Diagnosis when you feel calmer.")
+            return
+        win = getattr(self, "quiz_window", None)
+        try:
+            if win is not None and win.window.winfo_exists():
+                win.window.lift(); win.window.focus_force()
+                return
+        except Exception:
+            pass
+        from screens.quiz_window import StudyQuizWindow
+        from graphics.pet_graphics import pet_graphics
+        self.quiz_window = StudyQuizWindow(
+            self.parent, self.colors, self.s, self.app_state,
+            self.app_state.get_current_pet(), pet_graphics,
+            getattr(self, "model_manager", None),
+            on_reward=self.update_pet_info_display,
+            on_close=lambda: setattr(self, "quiz_window", None),
+        )
     def _apply_access_mode(self):
         """Show or hide the study features according to self.access_mode."""
         try:
@@ -369,6 +404,7 @@ class MainGameScreen:
             else:
                 self._show_restricted_features()
                 self._hide_relax_banner()
+            self._refresh_restricted_dev_button()
         except Exception as e:
             print(f"Error applying access mode: {e}")
 
@@ -376,19 +412,100 @@ class MainGameScreen:
         self.access_mode = mode
         self._apply_access_mode()
 
+    def _restricted_btn_text(self):
+        on = getattr(self, "access_mode", "full") == "restricted"
+        return "Restricted mode: ON" if on else "Restricted mode: OFF"
+
+    def toggle_restricted_mode(self):
+        """Developer tool: flip between full and restricted (calm-only) mode."""
+        new_mode = "full" if getattr(self, "access_mode", "full") == "restricted" else "restricted"
+        self._set_access_mode(new_mode)
+        # Restricted mode normally comes from a stressed diagnosis, which also switches the
+        # music stress filter on. Mirror that so the dev toggle behaves like the real thing.
+        self.set_user_stressed(new_mode == "restricted", "dev restricted toggle")
+
+    def _refresh_restricted_dev_button(self):
+        """Keep the dev button label in sync, whoever changed the mode (e.g. a diagnosis)."""
+        btn = getattr(self, "toggle_restricted_btn", None)
+        if btn is None:
+            return
+        try:
+            btn.set_text(self._restricted_btn_text())
+            self.schedule_panel_layout()
+        except Exception:
+            pass
+
+    def _schedule_nav_layout(self, event=None, force=False):
+        """Debounced: re-fit the top-bar buttons ~60 ms after the last size change."""
+        frame = getattr(self, "_nav_frame", None)
+        if frame is None:
+            return
+        if force:
+            self._nav_metrics = None
+        try:
+            if getattr(self, "_nav_layout_job", None) is not None:
+                frame.after_cancel(self._nav_layout_job)
+            self._nav_layout_job = frame.after(60, self._apply_nav_layout)
+        except Exception:
+            self._nav_layout_job = None
+
+    def _apply_nav_layout(self):
+        """Pick the largest button size at which every visible top-bar button fits, and apply it."""
+        self._nav_layout_job = None
+        frame = getattr(self, "_nav_frame", None)
+        if frame is None:
+            return
+        try:
+            from tkinter import font as tkfont
+            from utils import nav_layout
+            avail_w, avail_h = frame.winfo_width(), frame.winfo_height()
+            if avail_w <= 1 or avail_h <= 1:
+                return
+            widgets = [b for b in self.nav_button_widgets.values() if b.winfo_manager() == "pack"]
+            if not widgets:
+                return
+            fonts = {}
+
+            def _font(size):
+                if size not in fonts:
+                    fonts[size] = tkfont.Font(font=("Arial", size, "bold"))
+                return fonts[size]
+
+            scale, m = nav_layout.choose(
+                [b.text for b in widgets], avail_w, avail_h,
+                lambda text, size: _font(size).measure(text),
+                lambda size: _font(size).metrics("linespace"),
+                px_scale=self.ui_scale,
+            )
+            if m == getattr(self, "_nav_metrics", None):
+                return
+            self._nav_metrics = m
+            for b in widgets:
+                b.set_metrics(m.font, (m.pad_x, m.pad_y))
+                b.pack_configure(padx=m.gap_x, pady=m.gap_y)
+        except Exception as e:
+            print(f"Warning: top-bar layout failed: {type(e).__name__}: {e}")
+
     def _hide_restricted_features(self):
         """Restricted mode keeps: pet, playground, pet status, pet chat, music, minigame,
-        diagnosis, mailbox, settings. Hidden: Tasks button, Study Timer panel, timer progress."""
+        diagnosis, mailbox, settings. Hidden: Tasks button, Quiz button, Study Timer panel, timer progress."""
         if getattr(self, "_restricted_hidden", False):
             return
         tasks_btn = getattr(self, "nav_button_widgets", {}).get("\U0001F4C5 Tasks")
         if tasks_btn is not None:
             tasks_btn.pack_forget()
-        if hasattr(self, "timer_container"):
-            self.timer_container.place_forget()
+        quiz_btn = getattr(self, "nav_button_widgets", {}).get("📝 Quiz")
+        if quiz_btn is not None:
+            quiz_btn.pack_forget()
+        if hasattr(self, "quiz_window") and self.quiz_window:
+            try: self.quiz_window.close()
+            except Exception: pass
+        if hasattr(self, "panel_timer"):
+            self.panel_timer.set_visible(False)
         if hasattr(self, "taskbar_timer_progress"):
             self.taskbar_timer_progress.master.pack_forget()
         self._restricted_hidden = True
+        self._schedule_nav_layout(force=True)
 
     def _show_restricted_features(self):
         if not getattr(self, "_restricted_hidden", False):
@@ -401,11 +518,15 @@ class MainGameScreen:
             if music_btn is not None:
                 kw["before"] = music_btn
             tasks_btn.pack(**kw)
-        if hasattr(self, "timer_container"):
-            self.timer_container.place(relx=1.0, x=-self.s(720), y=self.s(60), relwidth=0.23, relheight=0.05)
+        quiz_btn = getattr(self, "nav_button_widgets", {}).get("📝 Quiz")
+        if quiz_btn is not None:
+            quiz_btn.pack(side="left", padx=self.s(8), pady=self.s(6), before=music_btn if music_btn else None)
+        if hasattr(self, "panel_timer"):
+            self.panel_timer.set_visible(True)
         if hasattr(self, "taskbar_timer_progress"):
             self.taskbar_timer_progress.master.pack(side="left", fill="x", expand=True, padx=self.s(10))
         self._restricted_hidden = False
+        self._schedule_nav_layout(force=True)
 
     def _show_relax_banner(self):
         if getattr(self, "relax_banner", None) is not None:
@@ -452,6 +573,13 @@ class MainGameScreen:
                 except (tk.TclError, AttributeError):
                     pass
                 self._music_sync_after_id = None
+
+            # Focus tracking: release the camera and close its window
+            if hasattr(self, 'focus_session'):
+                try:
+                    self.focus_session.shutdown()
+                except Exception as e:
+                    print(f"Error in focus_session.shutdown: {e}")
 
             # 2. Stop any background threads
             if hasattr(self, '_stop_drowsiness_detection'):
@@ -516,7 +644,11 @@ class MainGameScreen:
                     print(f"Error cleaning up chat interface: {e}")
                 self.chat_interface = None
 
-            if hasattr(self, 'model_manager') and self.model_manager:
+            _ev = getattr(self, '_chat_cancel', None)
+            if _ev is not None:
+                _ev.set()
+
+            if hasattr(self, 'model_manager') and self.model_manager and getattr(self, '_owns_model_manager', False):
                 try:
                     self.model_manager.stop_server()
                 except Exception as e:
@@ -541,6 +673,10 @@ class MainGameScreen:
                                 print(f"Error destroying frame: {e}")
                     
                     # Clear the reference
+                    try:
+                        if hasattr(self, 'quiz_window') and self.quiz_window:
+                            self.quiz_window.close()
+                    except Exception: pass
                     self.frame = None
                     
                 except Exception as e:
@@ -617,6 +753,16 @@ class MainGameScreen:
 
         # Pomodoro State
         self.pomo_phase = "WORK" # "WORK" or "BREAK"
+        self.focus_session = FocusSessionController(
+            parent=self.parent,
+            tracker_factory=lambda engine, holder: FocusTracker(engine, holder),
+            window_factory=lambda on_recalibrate: FocusWindow(self.parent, self.colors, 1.0, on_recalibrate),
+            is_enabled=lambda: bool(self.app_state.get_setting("focus_tracking_enabled", False)),
+            get_pet_name=self._focus_pet_name,
+            notify=NotificationManager.notify,
+            speak=self._focus_speak,
+            on_session_end=self._abort_session_for_distraction,
+        )
         self.pomo_work_duration = 25 * 60
         self.pomo_break_duration = 5 * 60
         self.pomo_cycle_count = 0
@@ -647,18 +793,32 @@ class MainGameScreen:
         self.chat_interface = None
         self.chat_locked = False  # Track whether chat is locked (EGG stage)
         self.chat_panel = None  # Reference to chat panel for dynamic updates
+        self._chat_cancel = threading.Event()   # set when the screen closes (stops a running stream)
+        self._chat_lang = None                  # language of the user's last message ("en"/"vi")
+        self._recent_actions_log = []           # action buttons shown in the last replies
         self.speech_bubble_visible = False
         self.speech_bubble_image = None
         self.speech_bubble_label = None
 
         # Initialize AI Backend
-        self.model_manager = ModelManager()
+        mm = getattr(self.app_controller, "model_manager", None)
+        if mm is None and hasattr(self.app_controller, "ensure_ai_server"):
+            self.app_controller.ensure_ai_server()
+            mm = getattr(self.app_controller, "model_manager", None)
+        if mm is not None:
+            self.model_manager = mm
+            self._owns_model_manager = False
+        else:
+            from utils.model_manager import ModelManager
+            self.model_manager = ModelManager()
+            self._owns_model_manager = True
         current_pet = self.app_state.get_current_pet()
         pet_name = getattr(current_pet, 'name', 'StudyPet') if current_pet else 'StudyPet'
         self.chatbot = ChatBot(pet_name=pet_name, server_url=f"http://127.0.0.1:{self.model_manager.port}")
 
         # Start server in background thread to avoid freezing UI during init
-        threading.Thread(target=self.model_manager.start_server, daemon=True).start()
+        if self._owns_model_manager:
+            threading.Thread(target=self.model_manager.start_server, daemon=True).start()
 
         # Messages for locked chat (Egg stage)
         self.locked_chat_messages = [
@@ -911,14 +1071,18 @@ class MainGameScreen:
         self.nav_button_widgets = {}
         nav_buttons = [
             ("📅 Tasks", lambda: self.switch_tab("tasks")),
+            ("📝 Quiz", lambda: self.open_quiz()),
             ("🎵 Music", lambda: self.switch_tab("music")),
             ("🎮 Minigame", lambda: self.start_minigame()),
             ("🧪 Diagnosis", lambda: self.open_diagnosis()),
             ("📮 Mailbox", lambda: self.open_stress_mailbox()),
+            ("🧘 Breathe", lambda: self._open_breathing_exercise()),
             ("⚙️ Settings", lambda: self.switch_tab("settings")),
         ]
 
-        for text, command in nav_buttons:
+        # Settings is created/packed FIRST and sits on the far right, so it always keeps its place;
+        # the left group is the one that shrinks (see _apply_nav_layout).
+        for text, command in sorted(nav_buttons, key=lambda tc: tc[0] != "⚙️ Settings"):
             btn = create_rounded_button(
                 nav_frame,
                 text,
@@ -928,32 +1092,22 @@ class MainGameScreen:
                 padding=(self.s(12), self.s(6)),
                 font=("Arial", 10, "bold")
             )
-            btn.pack(side="left", padx=self.s(8), pady=self.s(6))
+            btn.pack(side="right" if text == "⚙️ Settings" else "left", padx=self.s(8), pady=self.s(6))
             self.nav_button_widgets[text] = btn
+
+        # Dynamic button size: re-fit whenever the bar changes size
+        self._nav_frame = nav_frame
+        self._nav_layout_job = None
+        self._nav_metrics = None
+        nav_frame.bind("<Configure>", self._schedule_nav_layout)
 
         # Music controls removed from top bar to eliminate redundancy with Music panel
 
         # === LAYER 1: Collapsible UI blocks ===
         # Pet Status (top-left, collapsible)
-        self.status_expanded = False
-        self.status_container = RoundedPanel(self.frame, radius=15, bg=self.colors["bg_main"], fit_content=False)
-        self.status_container.place(x=self.s(20), y=self.s(60), relwidth=0.15, relheight=0.05)
-
-        self.status_header = tk.Frame(self.status_container.inner, bg=self.colors["bg_secondary"], relief="flat", bd=0, cursor="hand2")  # Use pet-specific background
-        self.status_header.pack(fill="x")
-        self.status_header.bind("<Button-1>", self.toggle_status_panel)
-        status_header_label = tk.Label(
-            self.status_header,
-            text="📊 Pet Status ▼",
-            font=("Arial", 10, "bold"),
-            bg=self.colors["bg_secondary"],
-            fg=self.colors["text_dark"],  # Use pet-specific dark text
-            cursor="hand2"
-        )
-        status_header_label.pack(pady=self.s(2))
-        status_header_label.bind("<Button-1>", self.toggle_status_panel)
-
-        self.status_panel = tk.Frame(self.status_container.inner, bg=self.colors["bg_secondary"])  # Use pet-specific background
+        self.panel_status = CollapsiblePanel(self.frame, "📊 Pet Status", self.colors, scale=self.ui_scale,
+                                             on_change=lambda _p: self.schedule_panel_layout())
+        self.status_panel = self.panel_status.body
 
         # Status content (no scrolling)
         self.status_content = tk.Frame(self.status_panel, bg=self.colors["bg_secondary"])  # Use pet-specific background
@@ -1080,6 +1234,20 @@ class MainGameScreen:
             font=("Arial", 9, "bold")
         )
         self.set_emotion_btn.pack(expand=True, fill="x")
+
+        # Restricted-mode row: flips the same access mode the stress check-in uses
+        self.restricted_frame = tk.Frame(self.dev_buttons_frame, bg=panel_bg)
+        self.restricted_frame.pack(fill="x", pady=(0, 5))
+        self.toggle_restricted_btn = create_rounded_button(
+            self.restricted_frame,
+            text=self._restricted_btn_text(),
+            command=self.toggle_restricted_mode,
+            style="accent",
+            radius=15,
+            padding=(self.s(8), self.s(4)),
+            font=("Arial", 9, "bold")
+        )
+        self.toggle_restricted_btn.pack(expand=True, fill="x")
         
         # Add some space at the bottom
         tk.Frame(self.status_content, height=10, bg=self.colors["bg_secondary"]).pack(fill='x')
@@ -1091,27 +1259,8 @@ class MainGameScreen:
         self.status_content.pack(fill="both", expand=True)
 
         # Study Timer (next to chat, top-right, collapsible)
-        self.timer_expanded = False
-        self.timer_container = RoundedPanel(self.frame, radius=15, bg=self.colors["bg_main"], fit_content=False)
-        # Place to the left of chat (chat left is at -350, distance d=20, timer width=0.23)
-        self.timer_container.place(relx=1.0, x=-self.s(720), y=self.s(60), relwidth=0.23, relheight=0.05)
-
-
-        self.timer_header = tk.Frame(self.timer_container.inner, bg=self.colors["bg_secondary"], relief="flat", bd=0, cursor="hand2")
-        self.timer_header.pack(fill="x")
-        self.timer_header.bind("<Button-1>", self.toggle_timer_panel)
-        self.timer_header_label = tk.Label(
-            self.timer_header,
-            text="⏱️ Study Timer ▼",
-            font=("Arial", 10, "bold"),
-            bg=self.colors["bg_secondary"],
-            fg=self.colors["text_dark"],
-            cursor="hand2"
-        )
-        self.timer_header_label.pack(pady=self.s(2))
-        self.timer_header_label.bind("<Button-1>", self.toggle_timer_panel)
-
-        self.timer_panel = tk.Frame(self.timer_container.inner, bg=self.colors["bg_secondary"])
+        self.panel_timer = CollapsiblePanel(self.frame, "⏱️ Study Timer", self.colors, scale=self.ui_scale)
+        self.timer_panel = self.panel_timer.body
         self.timer_content = tk.Frame(self.timer_panel, bg=self.colors["bg_secondary"])
         self.timer_content.pack(fill='both', expand=True)
         
@@ -1121,43 +1270,23 @@ class MainGameScreen:
         # Show timer content by default since we're removing scrolling
 
         # === LAYER 2: Compact collapsible chatbox (top-right, below nav) ===
-        self.chat_expanded = False
-        self.chat_container = RoundedPanel(self.frame, radius=15, bg=self.colors["bg_main"], fit_content=False)
-        self.chat_container.place(relx=1.0, x=-self.s(350), y=self.s(60), relwidth=0.225, relheight=0.05)
-
-
-        # Chat header (always visible, clickable) - square
-        self.chat_header = tk.Frame(
-            self.chat_container.inner,
-            bg=self.colors["bg_secondary"],  # Use pet-specific secondary background
-            relief="flat",
-            bd=0
-        )
-        self.chat_header.pack(fill="x")
-        self.chat_header.bind("<Button-1>", self.toggle_chat_panel)
-
-        chat_header_label = tk.Label(
-            self.chat_header,
-            text="💬 Pet Chat ▼",
-            font=("Arial", 10, "bold"),
-            bg=self.colors["bg_secondary"],
-            fg=self.colors["text_dark"],  # Use pet-specific dark text
-            cursor="hand2"
-        )
-        chat_header_label.pack(pady=self.s(2))
-        chat_header_label.bind("<Button-1>", self.toggle_chat_panel)
-
-        # Chat panel (hidden initially, expands on click) - square interior
-        self.chat_panel = tk.Frame(self.chat_container.inner, bg=self.colors["bg_secondary"])  # Use pet-specific background
+        self.panel_chat = CollapsiblePanel(self.frame, "💬 Pet Chat", self.colors, scale=self.ui_scale)
+        self.chat_panel = self.panel_chat.body
 
         # Chat content frame (no scrolling)
         self.chat_content = tk.Frame(self.chat_panel, bg=self.colors["bg_secondary"])
+        self.chat_content.pack(fill="both", expand=True)
         # Initially hidden, contents created in create_chat_ui
         self.create_chat_ui(self.chat_content)
 
         # Initialize chat lock state
         self.chat_locked = None  # Will be set based on pet stage
         self.update_chat_lock_state(force=True)
+
+        # Panel geometry has ONE owner: layout_panels(), re-run on every real resize.
+        self._panel_layout_job = None
+        self.frame.bind("<Configure>", self._on_frame_configure_panels, add="+")
+        self.schedule_panel_layout()
 
         # === LAYER 3: Bottom overlay taskbar (with pet name + evolution progress) ===
         try:
@@ -1266,10 +1395,33 @@ class MainGameScreen:
         # Update UI
         self.update_timer_ui()
 
+    def _restore_work_timer(self):
+        """Put the timer back to WORK with the previously chosen pomodoro style.
+
+        After a BREAK ends (or is stopped) total_duration_seconds still holds the break length, so the next
+        Start would run another break. Here we restore the work length remembered when the break began.
+        Does nothing to the length if we were not in a BREAK (a plain stop keeps whatever was chosen).
+        """
+        was_break = getattr(self, "pomo_phase", "WORK") == "BREAK"
+        self.pomo_phase = "WORK"
+        if was_break:
+            work = getattr(self, "pomo_last_work_seconds", None) or getattr(self, "pomo_work_duration", 25 * 60)
+            self.total_duration_seconds = int(work)
+            self.time_remaining = self.total_duration_seconds
+            try:
+                if hasattr(self, "timer_var"):
+                    self.timer_var.set(self.format_time(self.time_remaining))
+                if hasattr(self, "taskbar_timer_progress"):
+                    self.taskbar_timer_progress.configure(
+                        value=0, maximum=self.total_duration_seconds, style="Study.Horizontal.TProgressbar")
+            except Exception as e:
+                print(f"Error restoring work timer: {e}")
+
     def stop_study_session(self):
         """Stop the study session and reset UI to selection state."""
         # Stop the timer loop immediately
         self.stop_study_timer()
+        self._focus_sync()   # focus tracking: session is over, release the camera and close the window
 
         # Stop drowsiness detection if active
         self._stop_drowsiness_detection()
@@ -1300,8 +1452,8 @@ class MainGameScreen:
             # Update UI to show duration selection
             self.update_timer_ui()
             
-        # Reset session state
-        self.pomo_phase = "WORK"
+        # Reset session state (also puts the timer length back to the chosen work style if we were in a BREAK)
+        self._restore_work_timer()
         self.consecutive_drowsy_sessions = 0
 
         # Reset UI buttons to selection state
@@ -1357,109 +1509,73 @@ class MainGameScreen:
         # Reset speed to 1 after the session if desired,
         # but usually we keep it until the next custom session or reset.
 
+    # ------------------------------------------------------------------
+    # Collapsible panels (Pet Status / Study Timer / Pet Chat).
+    # All open/close + sizing logic lives in ui/collapsible_panel.py and
+    # ui/panel_layout.py.  The three toggle_* methods are kept as thin
+    # wrappers so older call sites keep working.
+    # ------------------------------------------------------------------
+    @property
+    def status_expanded(self):
+        panel = getattr(self, "panel_status", None)
+        return bool(panel and panel.expanded)
+
+    @property
+    def timer_expanded(self):
+        panel = getattr(self, "panel_timer", None)
+        return bool(panel and panel.expanded)
+
+    @property
+    def chat_expanded(self):
+        panel = getattr(self, "panel_chat", None)
+        return bool(panel and panel.expanded)
+
     def toggle_status_panel(self, event=None):
-        """Toggle pet status panel expansion/collapse."""
-        if not hasattr(self, 'status_expanded') or self.status_panel is None:
-            return
-        if self.status_expanded:
-            # Collapse
-            self.status_panel.pack_forget()
-            if hasattr(self, 'status_container'):
-                window_height = self.parent.winfo_height()
-                self.status_container.place(height=0.04 * window_height, relheight=0)
-            self.status_expanded = False
-            for widget in self.status_header.winfo_children():
-                if isinstance(widget, tk.Label):
-                    widget.config(text="📊 Pet Status ▼")
-        else:
-            # Expand
-            self.status_panel.pack(fill="both", expand=True, pady=(5, 0))
-            if hasattr(self, 'status_container'):
-                # Use larger height if developer mode is enabled
-                height = self.s(240) if hasattr(self, 'developer_mode') and self.developer_mode else self.s(140)
-                self.status_container.place(height=height, relheight=0)
-            self.status_expanded = True
-            for widget in self.status_header.winfo_children():
-                if isinstance(widget, tk.Label):
-                    widget.config(text="📊 Pet Status ▲")
+        self.panel_status.toggle()
 
     def toggle_timer_panel(self, event=None, force_expand=None):
-        """Toggle or force the timer panel expansion."""
-        if force_expand is not None:
-            self.timer_expanded = force_expand
+        if force_expand is None:
+            self.panel_timer.toggle()
         else:
-            self.timer_expanded = not getattr(self, 'timer_expanded', False)
-
-        if self.timer_expanded:
-            # Expanded state - adjust height based on content
-            base_height = self.s(360)  # Reduced to ~90% of 400 to better fit timer content
-            if getattr(self, 'scheduled_session_ready', False):
-                base_height += 50  # Add space for the plan CTA if visible
-
-            # Show the panel with proper expansion and increased padding
-            self.timer_panel.pack(fill="both", expand=True, pady=(self.s(10), 0), padx=self.s(5))
-
-            # Update container height
-            if hasattr(self, 'timer_container'):
-                self.timer_container.place(height=base_height, relheight=0)
-
-            # Ensure panel is visible and properly sized
-            self.timer_panel.update_idletasks()
-
-            # Update header text to show collapse indicator
-            self.timer_header_label.config(text="⏱️ Study Timer ▲")
-
-            # Ensure UI content reflects state
-            try:
-                # Removed self.update_timer_ui() call to prevent duplicate timer loops
-                pass
-            except Exception as e:
-                print(f"Error updating timer UI: {e}")
-        else:
-            # Collapsed state
-            self.timer_panel.pack_forget()
-            if hasattr(self, 'timer_container'):
-                window_height = self.parent.winfo_height()
-                self.timer_container.place(height=0.04 * window_height, relheight=0)
-            for widget in self.timer_header.winfo_children():
-                if isinstance(widget, tk.Label):
-                    widget.config(text="⏱️ Study Timer ▼")
+            self.panel_timer.set_expanded(force_expand)
 
     def toggle_chat_panel(self, event=None):
-        """Toggle chat panel expansion/collapse."""
-        if not hasattr(self, 'chat_expanded') or self.chat_panel is None:
+        self.panel_chat.toggle()
+
+    def _on_frame_configure_panels(self, event):
+        if event.widget is self.frame:
+            self.schedule_panel_layout()
+
+    def schedule_panel_layout(self):
+        """Coalesce many resize events into a single layout pass."""
+        if getattr(self, "_panel_layout_job", None) is None:
+            try:
+                self._panel_layout_job = self.frame.after_idle(self.layout_panels)
+            except tk.TclError:
+                self._panel_layout_job = None
+
+    def layout_panels(self):
+        """The ONLY place that positions Pet Status / Study Timer / Pet Chat."""
+        self._panel_layout_job = None
+        if not all(hasattr(self, n) for n in ("panel_status", "panel_timer", "panel_chat")):
             return
-        if self.chat_expanded:
-            # Collapse
-            self.chat_panel.pack_forget()
-            try:
-                self.chat_content.pack_forget()
-            except Exception:
-                pass
-            if hasattr(self, 'chat_container'):
-                window_height = self.parent.winfo_height()
-                self.chat_container.place(height=0.04 * window_height, relheight=0)
-            self.chat_expanded = False
-            # Update header text
-            for widget in self.chat_header.winfo_children():
-                if isinstance(widget, tk.Label):
-                    widget.config(text="💬 Pet Chat ▼")
-        else:
-            # Expand
-            self.chat_panel.pack(fill="both", expand=True, pady=(5, 0))
-            # Ensure chat content is visible
-            try:
-                self.chat_content.pack(fill='both', expand=True)
-            except Exception:
-                pass
-            if hasattr(self, 'chat_container'):
-                window_height = self.parent.winfo_height()
-                self.chat_container.place(height=0.45 * window_height, relheight=0)
-            self.chat_expanded = True
-            # Update header text
-            for widget in self.chat_header.winfo_children():
-                if isinstance(widget, tk.Label):
-                    widget.config(text="💬 Pet Chat ▲")
+        try:
+            w, h = self.frame.winfo_width(), self.frame.winfo_height()
+            if w < 200 or h < 200:  # not mapped yet
+                w, h = self.parent.winfo_width(), self.parent.winfo_height()
+            if w < 200 or h < 200:
+                w, h = 1280, 720
+            status_min_w = 0
+            if getattr(self, "developer_mode", False):
+                status_min_w = self.panel_status.required_width()
+            slots = compute_panel_slots(w, h, self.ui_scale, status_min_w=status_min_w)
+            for key, panel in (("status", self.panel_status),
+                               ("timer", self.panel_timer),
+                               ("chat", self.panel_chat)):
+                slot = slots[key]
+                panel.place_at(slot.x, slot.y, slot.w, slot.max_h, slot.expanded_h)
+        except tk.TclError:
+            pass  # window is being destroyed
 
 
     def handle_playground_click(self, event):
@@ -1680,8 +1796,7 @@ class MainGameScreen:
         text_color = self.colors.get("text_dark", "#333333")
         accent_color = self.colors.get("accent", "#4CAF50")
         
-        # Configure parent frame to expand
-        parent_frame.pack_propagate(False)
+        # (no pack_propagate(False): the panel sizes itself from this content's natural height)
         
         # Main container with padding
         container = tk.Frame(parent_frame, bg=bg_color)
@@ -1747,6 +1862,10 @@ class MainGameScreen:
             state="disabled"
         )
         self.stop_btn.pack(side='left', expand=True, padx=self.s(5))
+        self.focus_enabled_var = tk.BooleanVar(value=bool(self.app_state.get_setting("focus_tracking_enabled", False)))
+        tk.Checkbutton(container, text="📷 Focus tracking (camera)", variable=self.focus_enabled_var,
+                      command=self._on_focus_toggle, bg=bg_color, fg=text_color, selectcolor=bg_color,
+                      activebackground=bg_color, anchor="w").pack(fill="x", pady=(0, self.s(6)))
         
         # Create a separator line
         separator = ttk.Separator(container, orient='horizontal')
@@ -1951,6 +2070,8 @@ class MainGameScreen:
         self.timer_speed = 1 # Reset speed to normal for preset sessions
         self.pomo_work_duration = work_mins * 60
         self.pomo_break_duration = break_mins * 60
+        if getattr(self, 'pomo_phase', 'WORK') == 'BREAK':
+            self.pomo_last_work_seconds = work_mins * 60   # the newest choice wins when the break ends
 
         # If timer is NOT running, we can reset to the new work duration
         if not getattr(self, 'timer_running', False):
@@ -1970,21 +2091,24 @@ class MainGameScreen:
         except Exception:
             pass
 
+    NO_TASK_LABEL = "(No specific task)"
+
     def update_task_selector_list(self):
-        """Update the task dropdown with current non-completed tasks."""
+        """Update the Focus Task dropdown with current non-completed tasks.
+
+        The first entry is always NO_TASK_LABEL and it is what is shown by default: the app never picks a task
+        for the user. A task the user chose stays selected as long as it is still active; otherwise we fall back to
+        NO_TASK_LABEL.
+        """
         if not hasattr(self, 'task_selector'):
             return
 
         tasks = getattr(self.app_state, 'tasks', [])
-        # Only show tasks that aren't done
-        filtered_tasks = [t['title'] for t in tasks if not t.get('done')]
+        titles = [t['title'] for t in tasks if not t.get('done')]   # only tasks that aren't done
 
-        if not filtered_tasks:
-            filtered_tasks = ["No active tasks"]
-
-        self.task_selector['values'] = filtered_tasks
-        if not self.task_selector.get():
-            self.task_selector.current(0)
+        previous = self.task_selector.get()
+        self.task_selector['values'] = [self.NO_TASK_LABEL] + titles
+        self.task_selector.set(previous if previous in titles else self.NO_TASK_LABEL)
 
     def select_task_for_session(self, task_idx):
         """Link the current study session to a specific task."""
@@ -1997,6 +2121,12 @@ class MainGameScreen:
         """Tick the countdown timer once and reschedule if still running."""
         if not hasattr(self, 'timer_var') or not hasattr(self, 'time_remaining'):
             return
+        try:
+            self._focus_sync()
+        except Exception as e:
+            print(f'Error syncing focus tracking: {e}')
+        
+        
 
         if getattr(self, 'timer_running', False):
             # Only decrement time if not paused
@@ -2046,7 +2176,7 @@ class MainGameScreen:
             # Get task from the dropdown instead of prompting with a dialog
             if hasattr(self, 'task_selector'):
                 selected_text = self.task_selector.get()
-                if selected_text and selected_text != "No active tasks":
+                if selected_text and selected_text not in (self.NO_TASK_LABEL, "No active tasks"):
                     # Find the index of the task with this title
                     task_idx = next((i for i, t in enumerate(self.app_state.tasks)
                                    if t['title'] == selected_text and not t.get('done')), None)
@@ -2103,6 +2233,8 @@ class MainGameScreen:
         # Clear any existing timer ID and start the timer
         self.timer_id = None
         self.update_timer_ui()
+        if self.app_state.get_setting("focus_tracking_enabled", None) is None:
+            self.parent.after(800, self._ask_focus_consent)
         
     def timer_finished(self):
         """Handle timer completion and handle session phase transitions (Study -> Break -> Reset)."""
@@ -2130,15 +2262,13 @@ class MainGameScreen:
                 print(f"Error rewarding affection: {e}")
 
             # 2. Transition to BREAK
+            # Remember the work length that was just played (preset OR custom) so Start can return to it after the break.
+            self.pomo_last_work_seconds = self.total_duration_seconds
             self.pomo_phase = "BREAK"
             self.total_duration_seconds = self.pomo_break_duration
             self.time_remaining = self.total_duration_seconds
             self.status_var.set("Work complete! Time for a break. ☕")
             NotificationManager.notify("Break Time", "Work session finished! Take a short break to recharge.")
-
-            # Enable minigame after completing WORK phase
-            self.app_state.minigame_available = True
-            self.app_state.save_data()
 
             # Change progress bar to break color (blue)
             if hasattr(self, 'taskbar_timer_progress'):
@@ -2212,8 +2342,7 @@ class MainGameScreen:
             # Fallback notification
             if hasattr(self, 'show_notification'):
                 self.show_notification("Session stopped and saved!")
-            else:
-                print("Session stopped and saved!")
+        
 
     def _show_completion_message(self):
         """Show completion message on main thread."""
@@ -2388,8 +2517,10 @@ class MainGameScreen:
         self.chat_display.pack(side="left", fill="both", expand=True)
 
         # 2. Input Area
+        self.btn_action_frame = tk.Frame(parent_frame, bg=self.colors["bg_secondary"])
+        self.btn_action_frame.grid(row=2, column=0, sticky="ew", padx=5, pady=(0, 0))
         self.chat_input_frame = tk.Frame(parent_frame, bg=self.colors["bg_secondary"])
-        self.chat_input_frame.grid(row=2, column=0, sticky="ew", padx=5, pady=(0, 5))
+        self.chat_input_frame.grid(row=3, column=0, sticky="ew", padx=5, pady=(0, 5))
 
         # Container to center the input and button
         input_container = tk.Frame(self.chat_input_frame, bg=self.colors["bg_secondary"])
@@ -2419,18 +2550,24 @@ class MainGameScreen:
         self.chat_send_btn.pack(side="right")
 
         # 3. AI Disclaimer
+        disclaimer_text = persona.message("disclaimer", "en") + "\n" + persona.message("disclaimer", "vi")
         self.chat_disclaimer = tk.Label(
             parent_frame,
-            text="StudyPet AI can be wrong and has limited memory. Hehe!",
+            text=disclaimer_text,
             font=("Segoe UI", 8, "italic"),
             bg=self.colors["bg_secondary"],
             fg=self.colors.get("text_medium", "#888888"),
+            justify="center",
             anchor="center"
         )
-        self.chat_disclaimer.grid(row=3, column=0, pady=(0, 5), sticky="ew")
+        self.chat_disclaimer.grid(row=4, column=0, pady=(0, 5), sticky="ew")
 
         # Initial message
-        self.append_message("System", "Server started! I'm ready to chat. ✨")
+        current_pet = self.app_state.get_current_pet()
+        pet_name = getattr(current_pet, "name", "StudyPet") if current_pet else "StudyPet"
+        welcome_msg = (persona.message("welcome", "en", name=pet_name) + "\n"
+                       + persona.message("welcome", "vi", name=pet_name))
+        self.append_message("Pet", welcome_msg)
 
     def append_message(self, sender, text):
         """Append a message to the chat display."""
@@ -2461,49 +2598,195 @@ class MainGameScreen:
 
         self.chat_entry.delete(0, tk.END)
         self.append_message("You", user_text)
+        self._clear_action_buttons()
 
-        # Disable input while bot thinks
+        # Language of this turn (used for the fixed messages and the action buttons)
+        lang = persona.detect_language(user_text, getattr(self, "_chat_lang", None))
+        self._chat_lang = lang
+
+        # Crisis check: a self-harm phrase NEVER goes to the model; show the fixed support message.
+        try:
+            crisis = bool(analyze_text(user_text)["crisis"])
+        except Exception:
+            crisis = False
+        if crisis:
+            self.chatbot.set_safety_mode(True)
+            self.append_message("Pet", persona.crisis_message(lang))
+            return                                   # the input stays enabled
+
+        # Disable input while the pet answers
         self.chat_entry.config(state="disabled")
         if hasattr(self, 'chat_send_btn'):
             self.chat_send_btn.set_enabled(False)
 
-        # Run prediction in a separate thread to keep UI responsive
         threading.Thread(target=self._get_bot_response, args=(user_text,), daemon=True).start()
 
-    def _get_bot_response(self, text):
-        """Get response from the AI backend and update the UI."""
-        print(f"[ChatBot] Processing request: {text}")
+    def _chat_alive(self):
+        """True while the chat widgets exist and the screen is not closing."""
+        ev = getattr(self, "_chat_cancel", None)
+        if ev is not None and ev.is_set():
+            return False
         try:
-            # llama-server may still be loading right after launch: wait for it (background thread only)
+            return bool(self.chat_display.winfo_exists())
+        except Exception:
+            return False
+
+    def _get_bot_response(self, text):
+        """Worker thread: ask the model and stream the reply into the chat (all UI work goes through after())."""
+        lang = getattr(self, "_chat_lang", None) or "en"
+        print(f"[ChatBot] request ({len(text)} chars)")
+        after = self.parent.after
+        try:
             mm = getattr(self, "model_manager", None)
-            if mm is not None and not mm.is_server_running():
-                self.parent.after(0, lambda: self.append_message("Pet", "Waking up... one moment! Muuu~"))
+            # llama-server may still be loading right after launch: wait for it (up to 120 s)
+            if mm is not None and not getattr(mm, "ai_unavailable", False) and not mm.is_server_running():
+                after(0, lambda: self.append_message("Pet", persona.message("waking", lang)))
                 waited = 0
-                while waited < 45 and getattr(self, "model_manager", None) is not None \
-                        and not self.model_manager.is_server_running():
+                while waited < 120 and not mm.is_server_running() and not self._chat_cancel.is_set():
                     time.sleep(1.0)
                     waited += 1
+            if mm is not None and getattr(mm, "ai_unavailable", False):
+                after(0, lambda: self.append_message("Pet", persona.message("offline", lang)))
+                return
+            if self._chat_cancel.is_set():
+                return
 
-            # Ensure pet name is up to date in the bot
             current_pet = self.app_state.get_current_pet()
             pet_name = getattr(current_pet, 'name', 'StudyPet') if current_pet else 'StudyPet'
             self.chatbot.update_pet_name(pet_name)
+            stress = getattr(self.app_controller, "latest_stress", None)
+            self.chatbot.set_stress_level(stress.get("level_key") if stress else None)
 
+            buffer, lock = [], threading.Lock()
+            stream = {"done": False}
 
-            print(f"[ChatBot] Requesting prediction from bot (Pet Name: {pet_name})...")
-            response = self.chatbot.predict(text)
-            print(f"[ChatBot] Received response: {response}")
+            def on_token(piece):                     # worker thread: buffer only, no Tk calls
+                with lock:
+                    buffer.append(piece)
 
-            # Update UI on the main thread
-            self.parent.after(0, lambda: self.append_message("Pet", response))
+            def drain():                             # main thread, about every 40 ms while streaming
+                if stream["done"] or not self._chat_alive():
+                    return
+                with lock:
+                    piece = "".join(buffer)
+                    buffer.clear()
+                if piece:
+                    self.append_stream_text(piece)
+                after(40, drain)
+
+            def start_stream():
+                self.begin_stream_message("Pet")
+                after(40, drain)
+
+            after(0, start_stream)
+            reply = self.chatbot.predict_stream(text, on_token, cancel=self._chat_cancel)
+            stream["done"] = True
+            print(f"[ChatBot] reply ({len(reply)} chars)")
+            after(0, lambda r=reply: self.end_stream_message(r))
+
+            # Quick-action buttons (the same button is not offered again for the next 3 replies)
+            log = getattr(self, "_recent_actions_log", [])
+            recent = tuple(a for entry in log[-3:] for a in entry)
+            actions = chat_actions.suggest_actions(text, recent=recent)
+            self._recent_actions_log = (log + [list(actions)])[-3:]
+            if actions:
+                after(0, lambda a=tuple(actions), l=lang: self._show_action_buttons(a, l))
         except Exception as e:
-            print(f"[ChatBot] Error during prediction: {e}")
-            import traceback
-            traceback.print_exc()
-            self.parent.after(0, lambda: self.append_message("Error", str(e)))
+            print(f"[ChatBot] Error during prediction: {type(e).__name__}")
+            try:
+                after(0, lambda: self.append_message("Pet", persona.message("offline", lang)))
+            except Exception:
+                pass
         finally:
-            # Re-enable input on the main thread
-            self.parent.after(0, lambda: self._enable_chat_input())
+            try:
+                after(0, lambda: self._chat_alive() and self._enable_chat_input())
+            except Exception:
+                pass
+
+    # ---- streamed chat line (main thread only) --------------------------------
+    def begin_stream_message(self, sender):
+        """Start a chat line that is filled piece by piece."""
+        if not self._chat_alive():
+            return
+        cd = self.chat_display
+        cd.config(state="normal")
+        cd.insert(tk.END, f"{sender}: ", "bold")
+        cd.tag_configure("bold", font=("Segoe UI", 10, "bold"))
+        cd.mark_set("stream_start", "end-1c")
+        cd.mark_gravity("stream_start", "left")
+        cd.insert("end-1c", "...")                    # placeholder until the first piece arrives
+        cd.config(state="disabled")
+        cd.see(tk.END)
+        self._stream_active = True
+        self._stream_has_text = False
+
+    def append_stream_text(self, piece):
+        if not getattr(self, "_stream_active", False) or not self._chat_alive():
+            return
+        cd = self.chat_display
+        cd.config(state="normal")
+        if not self._stream_has_text:
+            cd.delete("stream_start", "end-1c")      # remove the "..." placeholder
+            self._stream_has_text = True
+        cd.insert("end-1c", piece)
+        cd.config(state="disabled")
+        cd.see(tk.END)
+
+    def end_stream_message(self, final_text):
+        """Replace the streamed text with the final cleaned reply (the model may have added *actions*)."""
+        if not getattr(self, "_stream_active", False):
+            self.append_message("Pet", final_text)
+            return
+        self._stream_active = False
+        if not self._chat_alive():
+            return
+        cd = self.chat_display
+        cd.config(state="normal")
+        cd.delete("stream_start", "end-1c")
+        cd.insert("end-1c", f"{final_text}\n\n")
+        cd.config(state="disabled")
+        cd.see(tk.END)
+
+    # ---- quick-action buttons ---------------------------------------------------
+    def _clear_action_buttons(self):
+        frame = getattr(self, "btn_action_frame", None)
+        if frame is None:
+            return
+        try:
+            for w in frame.winfo_children():
+                w.destroy()
+        except Exception:
+            pass
+
+    def _show_action_buttons(self, actions, lang):
+        frame = getattr(self, "btn_action_frame", None)
+        if frame is None or not self._chat_alive():
+            return
+        self._clear_action_buttons()
+        row = tk.Frame(frame, bg=self.colors["bg_secondary"])
+        row.pack(anchor="center", pady=(0, 4))
+        for action in actions:
+            btn = create_rounded_button(
+                row,
+                text=chat_actions.label(action, lang),
+                command=lambda a=action: self._handle_action_click(a),
+                style="secondary",
+                padding=(10, 5),
+                font=("Segoe UI", 9),
+            )
+            btn.pack(side="left", padx=4)
+
+    def _handle_action_click(self, action):
+        self._clear_action_buttons()
+        try:
+            if action == "breathing":
+                self._open_breathing_exercise()
+            elif action == "mailbox":
+                self.open_stress_mailbox()
+            elif action == "music":
+                self.show_music_player()
+        except Exception as e:
+            print(f"[ChatBot] action '{action}' failed: {type(e).__name__}")
 
     def _enable_chat_input(self):
         """Re-enable the chat input field and send button."""
@@ -2667,6 +2950,34 @@ class MainGameScreen:
                 btn.config(state="normal" if enabled else "disabled")
         except Exception:
             pass
+
+    def select_track_and_update(self, idx):
+        """Track Library click: select the track AND play it immediately.
+
+        idx = position in music_player.get_available_tracks() (the same list the buttons were built from).
+        Clicking the track that is already playing does nothing; clicking the current track while paused resumes it.
+        """
+        try:
+            tracks = self.music_player.get_available_tracks()
+            if not (0 <= idx < len(tracks)):
+                self._rebuild_music_library()      # list changed under us: refresh and let the user click again
+                return
+            target = tracks[idx]
+            current = self.music_player.get_current_track_info()
+            same = bool(current) and current.get("path") == target.get("path")
+            if same and self.music_player.is_music_playing():
+                ok = True                          # already playing this one
+            elif same:
+                self.music_player.resume()         # same track, paused -> just continue it
+                ok = True
+            else:
+                ok = self.music_player.play_track(idx)
+            if not ok:
+                NotificationManager.notify("Playback Error", f"Couldn't play: {target.get('name', 'this track')}")
+            self.update_music_displays()
+            self.update_music_button_states()
+        except Exception as e:
+            print(f"Error in select_track_and_update: {e}")
 
     def previous_track_and_update(self):
         """Go to previous track and update UIs."""
@@ -3554,18 +3865,13 @@ class MainGameScreen:
             traceback.print_exc()
     
     def refresh_developer_ui(self):
-        """Update developer UI elements based on current state."""
+        """Show/hide the developer tools; the Pet Status panel re-fits to its content."""
         if hasattr(self, 'dev_tools_frame'):
             if self.developer_mode:
                 self.dev_tools_frame.pack(fill="x", pady=(self.s(10), self.s(5)), padx=self.s(5))
-                # Update status panel height if expanded
-                if hasattr(self, 'status_expanded') and self.status_expanded and hasattr(self, 'status_container'):
-                    self.status_container.place_configure(height=self.s(460), relheight=0)
             else:
                 self.dev_tools_frame.pack_forget()
-                # Reset status panel height if expanded
-                if hasattr(self, 'status_expanded') and self.status_expanded and hasattr(self, 'status_container'):
-                    self.status_container.place_configure(height=self.s(240), relheight=0)
+            self.schedule_panel_layout()
 
     # -------------------------------------------------------------------------
     # Missing method implementations (restored)
@@ -3585,6 +3891,7 @@ class MainGameScreen:
             self.timer_id = None
 
         self.timer_running = False
+        self._restore_work_timer()    # if this was a BREAK: back to WORK with the chosen length (no-op otherwise)
         self.time_remaining = getattr(self, 'total_duration_seconds', 25 * 60)
 
         if hasattr(self, 'timer_var'):
@@ -3600,6 +3907,81 @@ class MainGameScreen:
                 pass
 
         self.show_notification("Session stopped and saved!")
+        try:
+            self._focus_sync()
+        except Exception as e:
+            print(f"Error syncing focus tracking: {e}")
+        
+        
+
+    def _focus_pet_name(self):
+        try:
+            pet = self.app_state.get_current_pet()
+            return getattr(pet, "name", None) if pet else None
+        except Exception:
+            return None
+
+    def _focus_speak(self, message):
+        """Pet speech bubble for a focus warning (replaces a bubble that is already showing)."""
+        try:
+            self._hide_speech_bubble()
+            self._show_speech_bubble(message)
+        except Exception as e:
+            print(f"Error showing focus speech bubble: {e}")
+
+    def _focus_sync(self):
+        """Tell the focus tracker what the timer is doing. Safe to call any time, never raises."""
+        try:
+            self.focus_session.sync(
+                timer_running=getattr(self, "timer_running", False),
+                paused=getattr(self, "study_timer_paused", False),
+                phase=getattr(self, "pomo_phase", "WORK"),
+                total_minutes=getattr(self, "total_duration_seconds", 25 * 60) / 60.0,
+            )
+        except Exception as e:
+            print(f"Error syncing focus tracking: {e}")
+
+    def _abort_session_for_distraction(self, reason="distraction"):
+        """Focus tracking ended the session. Stop the timer WITHOUT any reward:
+        no affection, no pomo_count on the task, no pomo_cycle_count, no minigame unlock, no stats/streak.
+        Do NOT call timer_finished, stop_timer, _show_stop_message or _show_completion_message."""
+        self.stop_study_timer()                      # cancels the tick; timer_running / study_timer_active -> False
+        self.study_timer_paused = False
+        self.pomo_phase = "WORK"
+        self.time_remaining = getattr(self, "total_duration_seconds", 25 * 60)
+        if hasattr(self, "timer_var"):
+            self.timer_var.set(self.format_time(self.time_remaining))
+        if hasattr(self, "start_pause_btn"):
+            self.start_pause_btn.config(text="Start", command=self.start_timer)
+        if hasattr(self, "stop_btn"):
+            self.stop_btn.config(state="disabled")
+        if hasattr(self, "taskbar_timer_progress"):
+            try:
+                self.taskbar_timer_progress.configure(value=0, style="Study.Horizontal.TProgressbar")
+            except Exception:
+                pass
+        if hasattr(self, "status_var"):
+            self.status_var.set("Session ended: too many distractions. No points this time.")
+        self._focus_sync()
+
+    def _on_focus_toggle(self):
+        if self.focus_enabled_var.get():
+            self._ask_focus_consent()
+        else:
+            self.app_state.set_setting("focus_tracking_enabled", False)
+            self._focus_sync()
+
+
+    def _ask_focus_consent(self):
+        from utils.notifications import StudyPetNotification
+        def done(allowed, _unused=None):
+            self.app_state.set_setting("focus_tracking_enabled", bool(allowed))
+            try:
+                self.focus_enabled_var.set(bool(allowed))
+            except Exception:
+                pass
+            self._focus_sync()
+        StudyPetNotification.show_camera_permission(self.parent, done)
 
     def reset_affection(self):
         """Reset the current pet's affection to zero (dev tool)."""
@@ -3660,15 +4042,54 @@ class MainGameScreen:
             return False
 
     def start_minigame(self):
-        """Start the minigame session."""
-        if not self.app_state.minigame_available:
-            NotificationManager.notify("Minigame Unavailable", "You've already played the minigame! Complete a study session to unlock it again.")
+        """Top-bar Minigame button: always playable. Opens the chooser."""
+        if getattr(self, "minigame_active", False):
+            NotificationManager.notify("Minigame", "Finish the current minigame first.")
             return
+        dino = getattr(self, "dino_window", None)
+        try:
+            if dino is not None and not dino._closed:
+                dino.window.lift()
+                return
+        except Exception:
+            pass
+        burst = getattr(self, "burst_window", None)
+        try:
+            if burst is not None and not burst._closed:
+                burst.window.lift()
+                return
+        except Exception:
+            pass
+        picker = getattr(self, "minigame_picker", None)
+        try:
+            if picker is not None and picker.window.winfo_exists():
+                picker.window.lift(); picker.window.focus_force()
+                return
+        except Exception:
+            pass
+        from screens.minigame_picker import MinigamePicker
+        from utils import minigame_limits
+        self.minigame_picker = MinigamePicker(
+            self.parent, self.colors, self.s,
+            on_choose=self._launch_minigame,
+            on_cancel=lambda: setattr(self, "minigame_picker", None),
+            rewards_left=self.app_state.minigame_rewards_left(),
+            rewards_limit=minigame_limits.DAILY_REWARDED_PLAYS,
+        )
 
-        # Disable minigame and persist
-        self.app_state.minigame_available = False
-        self.app_state.save_data()
+    def _launch_minigame(self, key):
+        """A minigame was chosen. Decide now whether this run can pay affection (daily limit), then start it."""
+        self.minigame_picker = None
+        self._minigame_rewarded = self.app_state.minigame_rewards_left() > 0
+        if key == "runner":
+            self._start_dino_game()
+        elif key == "burst":
+            self._start_burst_game()
+        else:
+            self._start_circle_game()
 
+    def _start_circle_game(self):
+        """The original minigame: eat the circles on the playground."""
         # Minigame state
         self.minigame_active = True
         self.minigame_score = 0
@@ -3690,7 +4111,7 @@ class MainGameScreen:
         if self.playground_renderer:
             self.playground_renderer.start_minigame(self)
 
-        NotificationManager.notify("🎮 Minigame Started!", "Eat as many circles as you can!")
+        NotificationManager.notify("🎮 Minigame Started!", "Eat as many circles as you can!" + ("" if self._minigame_rewarded else " (practice run - no affection today)"))
 
     def stop_minigame(self):
         """Stop the minigame session and reward the user."""
@@ -3708,10 +4129,12 @@ class MainGameScreen:
         import math
         reward = math.ceil(score / 10) * 10
 
-        if reward > 0:
+        if reward > 0 and getattr(self, "_minigame_rewarded", False) and self.app_state.claim_minigame_reward():
             self.app_state.affection += reward
             self.update_pet_info_display()
             NotificationManager.notify("🎮 Game Over!", f"You ate {score} circles and earned +{reward} affection!")
+        elif reward > 0:
+            NotificationManager.notify("🎮 Game Over!", f"You ate {score} circles. Practice run - today's affection limit is used up, but play as much as you like!")
         else:
             NotificationManager.notify("🎮 Game Over!", f"You ate {score} circles. Try harder next time!")
 
@@ -3722,5 +4145,49 @@ class MainGameScreen:
         # Tell playground to clear circles
         if self.playground_renderer:
             self.playground_renderer.stop_minigame()
+
+    def _start_dino_game(self):
+        """Pet Runner: small centred window, the pet is the dinosaur."""
+        from screens.dino_game_window import DinoGameWindow
+        from graphics.pet_graphics import pet_graphics
+        self.dino_window = DinoGameWindow(
+            self.parent, self.colors, self.s,
+            self.app_state.get_current_pet(), pet_graphics,
+            on_finish=self._finish_dino_game,
+            rewarded_fn=self._dino_run_rewarded,
+        )
+
+    def _start_burst_game(self):
+        """Encouragement Burst: calm click-for-hearts window. No score, no affection reward, no daily limit."""
+        from screens.burst_window import BurstWindow
+        self.burst_window = BurstWindow(
+            self.parent, self.colors, self.s,
+            on_close=lambda: setattr(self, "burst_window", None),
+        )
+
+    def _dino_run_rewarded(self):
+        """Pet Runner calls this at the start of every run: can this run still pay affection today?"""
+        self._minigame_rewarded = self.app_state.minigame_rewards_left() > 0
+        return self._minigame_rewarded
+
+    def _finish_dino_game(self, score):
+        """Called once by the Pet Runner window when the run ends. Same reward rule as the circle game."""
+        from utils.dino_logic import reward_for_score
+        reward = reward_for_score(score)
+        if reward > 0 and getattr(self, "_minigame_rewarded", False) and self.app_state.claim_minigame_reward():
+            self.app_state.affection += reward
+            try:
+                self.update_pet_info_display()
+            except Exception:
+                pass
+            try:
+                self.app_state.save_data()
+            except Exception:
+                pass
+            NotificationManager.notify("🦖 Pet Runner", f"You jumped {score} obstacles and earned +{reward} affection!")
+        elif reward > 0:
+            NotificationManager.notify("🦖 Pet Runner", f"You jumped {score} obstacles. Practice run - today's affection limit is used up!")
+        else:
+            NotificationManager.notify("🦖 Pet Runner", f"You jumped {score} obstacles. Try harder next time!")
 
 

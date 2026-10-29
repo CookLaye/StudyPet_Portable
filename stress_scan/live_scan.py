@@ -28,6 +28,7 @@ Usage from Tk (main thread)
         snap["face_found"] bool
         snap["frame_rgb"]  numpy HxWx3 uint8 (already mirrored, preview-sized) or None
         snap["result"]     None until phase is "done"/"error", then a dict (below)
+        snap["live"]       None or the latest model reading dict (see stress_scan/live_readout.py)
     ...on close:      scanner.stop()
 
 Result dict
@@ -50,6 +51,7 @@ import time
 os.environ.setdefault("OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS", "0")
 
 from . import config
+from .live_readout import build_live_reading, running_blink_rate
 
 PREVIEW_SIZE = (640, 480)   # (width, height) of the frames handed to the UI (4:3, = a typical webcam frame)
 
@@ -254,7 +256,7 @@ class LiveScanner:
         self._thread = None
         self._state = {
             "phase": "idle", "message": "", "time_left": int(self.scan_seconds),
-            "face_found": False, "frame_rgb": None, "result": None,
+            "face_found": False, "frame_rgb": None, "result": None, "live": None,
         }
 
     # ---- public --------------------------------------------------------
@@ -312,7 +314,7 @@ class LiveScanner:
                 return self._set(phase="stopped")
 
             # 3) scan loop (same maths as test_stress_scan.run_scan)
-            self._set(phase="scanning", message="Look at the camera and relax your face.")
+            self._set(phase="scanning", message="Look at the camera and relax your face.", live=None)
             samples = []
             blink_count = 0
             last_blink = 0.0
@@ -320,6 +322,9 @@ class LiveScanner:
             frames_with_face = 0
             first_face_t = None
             last_face_t = None
+
+            baseline = load_baseline(config.BASELINE_PATH)
+            inferences = 0
 
             frames = self._frame_source(self._stop, self.scan_seconds, config.PROCESS_FPS)
             for timestamp, frame in frames:
@@ -350,6 +355,10 @@ class LiveScanner:
                             sample["valence"] = emo["valence"]
                             sample["arousal"] = emo["arousal"]
                             samples.append(sample)
+                            inferences += 1
+                            self._set(live=build_live_reading(
+                                p, emo["valence"], emo["arousal"], inferences, samples,
+                                running_blink_rate(blink_count, first_face_t, timestamp), baseline))
                 else:
                     last_blink = 0.0
 
@@ -379,7 +388,6 @@ class LiveScanner:
             features = aggregate_features(samples, blink_rate)
 
             face_ratio = frames_with_face / frames_processed
-            baseline = load_baseline(config.BASELINE_PATH)
             conf, reason = compute_confidence(face_ratio, len(samples), baseline is not None)
 
             if reason:

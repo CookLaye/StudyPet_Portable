@@ -1,4 +1,5 @@
 import tkinter as tk
+import tkinter.font as tkfont
 from tkinter import ttk, messagebox
 from datetime import datetime, date, timedelta
 from ui.rounded_widgets import RoundedPanel
@@ -24,6 +25,13 @@ class TasksPanel(RoundedPanel):
         self.colors = simple_theme.colors
         self.font = ("Arial", 11)
 
+        # The app is DPI-aware: fonts grow with the display but raw pixel numbers do not.
+        # Everything pixel-based in this panel goes through self._px() so it grows with the fonts.
+        try:
+            self._ui_scale = self.winfo_fpixels('1i') / 96.0
+        except Exception:
+            self._ui_scale = 1.0
+
         # View settings
         self.view_days = 7
         self.view_start = date.today() - timedelta(days=2)
@@ -36,14 +44,19 @@ class TasksPanel(RoundedPanel):
         self.after(100, self._render_daily)
         self.after(100, self._render_planned_list)
 
+    def _px(self, v):
+        """Scale a 96-DPI pixel value to this display."""
+        return max(1, round(v * self._ui_scale))
+
     def _build_ui(self):
         # --- Main Layout Container ---
         self.main_container = tk.Frame(self.inner, bg=self.colors["bg_main"])
         self.main_container.pack(fill="both", expand=True)
         self.main_container.grid_columnconfigure(0, weight=1)
-        self.main_container.grid_rowconfigure(2, weight=6, minsize=300) # Calendar gets more space
-        self.main_container.grid_rowconfigure(3, weight=2, minsize=100) # Daily habits
-        self.main_container.grid_rowconfigure(4, weight=2, minsize=100) # Planned tasks
+        # Canvases below request height=1, so these weights (not the canvases' default ~7cm request) decide the split.
+        self.main_container.grid_rowconfigure(2, weight=3, minsize=self._px(170)) # Calendar: biggest
+        self.main_container.grid_rowconfigure(3, weight=1, minsize=self._px(90))  # Daily habits: small
+        self.main_container.grid_rowconfigure(4, weight=2, minsize=self._px(110)) # Planned tasks: medium
 
         # --- Top Navigation Bar ---
         top = tk.Frame(self.main_container, bg=self.colors["bg_main"])
@@ -104,7 +117,7 @@ class TasksPanel(RoundedPanel):
 
         tk.Label(timeline_container, text="📅 Calendar", font=("Arial", 11, "bold"), bg=self.colors["bg_main"], fg=self.colors["text_dark"]).pack(anchor="w", pady=(0, 5))
 
-        self.timeline_canvas = tk.Canvas(timeline_container, bg="#FFFFFF", highlightthickness=1, highlightbackground="#E5E7EB")
+        self.timeline_canvas = tk.Canvas(timeline_container, bg="#FFFFFF", height=1, highlightthickness=1, highlightbackground="#E5E7EB")
         self.timeline_vsb = tk.Scrollbar(timeline_container, orient="vertical", command=self.timeline_canvas.yview)
         self.timeline_canvas.configure(yscrollcommand=self.timeline_vsb.set)
 
@@ -121,7 +134,7 @@ class TasksPanel(RoundedPanel):
 
         tk.Label(daily_container, text="✅ Daily Habits", font=("Arial", 11, "bold"), bg=self.colors["bg_main"], fg=self.colors["text_dark"]).pack(anchor="w", pady=(0, 5))
 
-        self.daily_canvas = tk.Canvas(daily_container, bg=self.colors["bg_secondary"], highlightthickness=0)
+        self.daily_canvas = tk.Canvas(daily_container, bg=self.colors["bg_secondary"], height=1, highlightthickness=0)
         self.daily_vsb = tk.Scrollbar(daily_container, orient="vertical", command=self.daily_canvas.yview)
         self.daily_canvas.configure(yscrollcommand=self.daily_vsb.set)
 
@@ -141,7 +154,7 @@ class TasksPanel(RoundedPanel):
 
         tk.Label(planned_container, text="📅 Planned", font=("Arial", 11, "bold"), bg=self.colors["bg_main"], fg=self.colors["text_dark"]).pack(anchor="w", pady=(0, 5))
 
-        self.planned_canvas = tk.Canvas(planned_container, bg=self.colors["bg_secondary"], highlightthickness=0)
+        self.planned_canvas = tk.Canvas(planned_container, bg=self.colors["bg_secondary"], height=1, highlightthickness=0)
         self.planned_vsb = tk.Scrollbar(planned_container, orient="vertical", command=self.planned_canvas.yview)
         self.planned_canvas.configure(yscrollcommand=self.planned_vsb.set)
 
@@ -288,6 +301,21 @@ class TasksPanel(RoundedPanel):
         view_end = self.view_start + timedelta(days=self.view_days - 1)
         col_w = w / self.view_days
 
+        # --- DPI-safe layout numbers (derived from real font heights, not hardcoded pixels) ---
+        px = self._px
+        if not hasattr(self, "_tl_metrics"):
+            self._tl_metrics = tuple(
+                tkfont.Font(family="Arial", size=sz, weight=wt).metrics("linespace")
+                for sz, wt in ((9, "normal"), (10, "bold"), (9, "bold")))
+        lh_day, lh_num, lh_bar = self._tl_metrics
+        pad = px(6)
+        y_day = pad + lh_day / 2                          # weekday text centre (SUN, MON...)
+        r_num = lh_num / 2 + px(2)                        # radius of the "today" circle
+        y_num = pad + lh_day + px(2) + r_num              # day-number centre, always below the weekday text
+        hdr_h = y_num + r_num + pad                       # header bottom line
+        bar_h = lh_bar + px(8)                            # task bar height fits its label
+        row_h = bar_h + px(6)                             # task bar pitch
+
         self.range_lbl.configure(text=f"{self.view_start.strftime('%b %d')} – {view_end.strftime('%b %d, %Y')}")
 
         # Draw day columns
@@ -307,21 +335,20 @@ class TasksPanel(RoundedPanel):
             self.timeline_canvas.create_line(i*col_w, 0, i*col_w, 9999, fill="#E5E7EB", width=1)
 
         # Header line - increased height to prevent overlap
-        self.timeline_canvas.create_line(0, 65, w, 65, fill="#D1D5DB", width=1)
+        self.timeline_canvas.create_line(0, hdr_h, w, hdr_h, fill="#D1D5DB", width=1)
 
         # Draw day labels
         for i in range(self.view_days):
             d = self.view_start + timedelta(days=i)
             cx = i*col_w + col_w/2
             day_col = "#2563EB" if d == today else ("#9CA3AF" if d.weekday() >= 5 else "#6B7280")
-            self.timeline_canvas.create_text(cx, 20, text=d.strftime("%a").upper(), font=("Arial", 9), fill=day_col)
+            self.timeline_canvas.create_text(cx, y_day, text=d.strftime("%a").upper(), font=("Arial", 9), fill=day_col)
 
             if d == today:
-                r = 10
-                self.timeline_canvas.create_oval(cx-r, 30-r, cx+r, 30+r, fill="#2563EB", outline="")
-                self.timeline_canvas.create_text(cx, 30, text=str(d.day), font=("Arial", 10, "bold"), fill="#FFFFFF")
+                self.timeline_canvas.create_oval(cx-r_num, y_num-r_num, cx+r_num, y_num+r_num, fill="#2563EB", outline="")
+                self.timeline_canvas.create_text(cx, y_num, text=str(d.day), font=("Arial", 10, "bold"), fill="#FFFFFF")
             else:
-                self.timeline_canvas.create_text(cx, 30, text=str(d.day), font=("Arial", 10, "bold"), fill=day_col)
+                self.timeline_canvas.create_text(cx, y_num, text=str(d.day), font=("Arial", 10, "bold"), fill=day_col)
 
         # Filter and place tasks
         visible = []
@@ -357,8 +384,8 @@ class TasksPanel(RoundedPanel):
         # Render task bars
         for task in visible:
             row = task["_row"]
-            y0 = 45 + row*25 + 5
-            y1 = y0 + 20
+            y0 = hdr_h + px(8) + row*row_h
+            y1 = y0 + bar_h
 
             cs = max(task["_s"], self.view_start)
             ce = min(task["_e"], view_end)
@@ -370,7 +397,7 @@ class TasksPanel(RoundedPanel):
             clr = "#EF4444" if prio == "High" else ("#F59E0B" if prio == "Medium" else "#22C55E")
             if task["done"]: clr = "#D1D5DB"
 
-            self._draw_rounded_rect(x0, y0, x1, y1, r=6, fill=clr)
+            self._draw_rounded_rect(x0, y0, x1, y1, r=min(px(6), int(bar_h // 2)), fill=clr)
 
             bar_w = x1 - x0
             label = task["title"] + (f" 🍅{task.get('pomo_count', 0)}" if task.get('pomo_count', 0) > 0 else "")
@@ -380,7 +407,7 @@ class TasksPanel(RoundedPanel):
 
             self._bars.append((x0, y0, x1, y1, task["_idx"]))
 
-        self.timeline_canvas.configure(scrollregion=(0, 0, w, 40 + len(row_ends)*25 + 40))
+        self.timeline_canvas.configure(scrollregion=(0, 0, w, hdr_h + px(8) + len(row_ends)*row_h + px(16)))
 
     def _draw_rounded_rect(self, x0, y0, x1, y1, r=6, fill="#000"):
         # Standard Tkinter rounded rect approximation
@@ -519,6 +546,7 @@ class TasksPanel(RoundedPanel):
         # Explicitly update scrollregion after adding widgets
         self.daily_canvas.update_idletasks()
         self.daily_canvas.configure(scrollregion=self.daily_canvas.bbox("all"))
+        self._sync_timer_selector()
 
     def _render_planned_list(self):
         """Renders a scrollable list of non-daily tasks sorted by due date."""
@@ -560,6 +588,16 @@ class TasksPanel(RoundedPanel):
 
         self.planned_canvas.update_idletasks()
         self.planned_canvas.configure(scrollregion=self.planned_canvas.bbox("all"))
+        self._sync_timer_selector()
+
+    def _sync_timer_selector(self):
+        """Refresh the Study Timer's Focus Task dropdown (no-op if the main screen isn't there yet)."""
+        try:
+            msg = self.main_game_screen
+            if msg is not None and hasattr(msg, 'update_task_selector_list'):
+                msg.update_task_selector_list()
+        except Exception as e:
+            print(f"Error syncing task selector: {e}")
 
     def _toggle_planned(self, idx, var):
         self.app_state.tasks[idx]["done"] = var.get()

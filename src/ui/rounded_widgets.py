@@ -113,6 +113,14 @@ class RoundedButton(tk.Frame):
         self.canvas.create_text(w // 2, h // 2, text=self.text, font=self.font, fill=text_color)
         self.update_idletasks()
 
+    def set_metrics(self, font_size=None, padding=None):
+        """Change the font size (pt) and/or inner padding (px_x, px_y) and redraw."""
+        if font_size is not None:
+            self.font.configure(size=int(font_size))
+        if padding is not None:
+            self.padding = (int(padding[0]), int(padding[1]))
+        self.draw()
+
     def set_text(self, text: str):
         self.text = text
         self.draw()

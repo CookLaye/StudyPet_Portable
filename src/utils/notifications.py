@@ -97,20 +97,20 @@ class StudyPetNotification:
         Maintained as a custom UI element as it requires user interaction.
         """
         win = tk.Toplevel(parent)
-        win.title("Camera Permission")
+        win.title("📷 Focus Tracking for Study Sessions")
         win.resizable(False, False)
-        win.geometry(f"{int(win.winfo_screenwidth() * 0.3)}x{int(win.winfo_screenheight() * 0.3)}")
-        win.attributes('-topmost', True)
+        win.attributes("-topmost", True)
 
         container = tk.Frame(win, padx=20, pady=20)
         container.pack(fill=tk.BOTH, expand=True)
 
-        tk.Label(container, text="📷 Camera Access for Study Session",
+        tk.Label(container, text="📷 Focus Tracking for Study Sessions",
                  font=("Arial", 12, "bold")).pack(pady=(0, 15))
 
-        msg_text = ("Would you like to enable camera access during study sessions?\n\n"
-                   "🔍 This feature helps track your focus and attention by monitoring when you're at your desk.\n\n"
-                   "🔒 Your privacy is respected - no recordings or images are saved. The camera is only used to detect presence.")
+        msg_text = ("While a work session runs, StudyPet can use your camera to check that you are looking at the screen.\n\n"
+                   "⚠️ If you look away too often, your pet will warn you. After a few warnings the session ends and earns no points.\n\n"
+                   "🔒 Everything is processed on this computer. No video or pictures are saved. The camera is off during breaks and pauses.\n\n"
+                   "You can switch this off any time with the checkbox under the timer buttons.")
         tk.Label(container, text=msg_text, wraplength=350, justify=tk.LEFT).pack(pady=(0, 20))
 
         btn_frame = tk.Frame(container)
@@ -124,8 +124,15 @@ class StudyPetNotification:
             win.destroy()
             if choice_callback: choice_callback(False, None)
 
-        tk.Button(btn_frame, text="Enable", command=on_accept, bg='#4CAF50', fg='white', padx=20).pack(side=tk.LEFT, padx=10)
+        tk.Button(btn_frame, text="Enable", command=on_accept, bg="#4CAF50", fg="white", padx=20).pack(side=tk.LEFT, padx=10)
         tk.Button(btn_frame, text="Not Now", command=on_decline, padx=20).pack(side=tk.LEFT, padx=10)
+
+        # FOCUS-DIALOG-AUTOSIZE: fit the window to its text, centre it, and treat the X button as "Not Now"
+        win.protocol("WM_DELETE_WINDOW", on_decline)
+        win.update_idletasks()
+        w = max(win.winfo_reqwidth(), int(win.winfo_screenwidth() * 0.3))
+        h = win.winfo_reqheight()
+        win.geometry(f"{w}x{h}+{max(0, (win.winfo_screenwidth() - w) // 2)}+{max(0, (win.winfo_screenheight() - h) // 2)}")
 
 if __name__ == "__main__":
     # Quick test

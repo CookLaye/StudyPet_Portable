@@ -2,7 +2,7 @@
 """
 Downloads everything StudyPet needs besides Python packages:
   1. the llama.cpp server binary   (chat engine)
-  2. the Llama 3.2 1B GGUF model    (chat brain, ~0.8 GB)
+  2. the chat model (chosen for this computer) GGUF model    (chat brain, ~0.8 GB)
   3. the face-scan models           (stress scan, ~20 MB; skipped if the scan libraries are not installed)
 
 Each step is independent: if one fails the others are still tried, and the exit code is 1 if any failed.

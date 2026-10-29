@@ -1,0 +1,16 @@
+{
+  "last_verified": "2026-10-14",
+  "verification_note": "Collected from public directories (TherapyRoute, Find A Helpline, a Vietnamese hotline list). NOT yet confirmed on each organisation's official site: the project owner should confirm numbers and opening hours before release. Hours change; edit this file only, no code change is needed.",
+  "emergency": [
+    {"number": "115", "label_en": "medical emergency / ambulance", "label_vi": "cấp cứu y tế"},
+    {"number": "113", "label_en": "police", "label_vi": "công an"}
+  ],
+  "support": [
+    {"name": "Đường dây nóng Ngày mai", "number": "096 306 1414",
+     "hours_en": "Wed to Sun, 13:00-20:30", "hours_vi": "Thứ Tư đến Chủ nhật, 13:00-20:30"},
+    {"name": "Hy Vọng Sống (HOPE)", "number": "086 50 444 00",
+     "hours_en": "daily, 16:30-20:30", "hours_vi": "hằng ngày, 16:30-20:30"},
+    {"name": "Tổng đài bảo vệ trẻ em", "number": "111",
+     "hours_en": "24/7, free, for people under 18", "hours_vi": "24/7, miễn phí, dành cho người dưới 18 tuổi"}
+  ]
+}

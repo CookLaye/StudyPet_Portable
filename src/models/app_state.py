@@ -39,6 +39,9 @@ class AppState:
         self.last_saved_at = None
         self.tasks = []
         self.minigame_available = True
+        # Daily limit for affection rewards from minigames (see utils/minigame_limits.py)
+        self.minigame_rewards_date = None
+        self.minigame_rewards_used = 0
 
 
 
@@ -304,6 +307,8 @@ class AppState:
                 'last_saved_at': datetime.now().isoformat(),
                 'tasks': self.tasks,
                 'minigame_available': self.minigame_available,
+                'minigame_rewards_date': self.minigame_rewards_date,
+                'minigame_rewards_used': self.minigame_rewards_used,
                 'settings': self.settings
             }
             return make_serializable(data)
@@ -386,6 +391,20 @@ class AppState:
         """Specifically save the tasks list to persist changes."""
         print("[REPRO] AppState.save_tasks called")
         return self.save_data()
+
+    def minigame_rewards_left(self) -> int:
+        """How many affection-paying minigame runs are left today."""
+        from utils import minigame_limits as ML
+        return ML.rewards_left(self.minigame_rewards_date, self.minigame_rewards_used, ML.today_str())
+
+    def claim_minigame_reward(self) -> bool:
+        """Use up one rewarded run for today. Returns False if today's limit is already used."""
+        from utils import minigame_limits as ML
+        ok, day, used = ML.claim(self.minigame_rewards_date, self.minigame_rewards_used, ML.today_str())
+        self.minigame_rewards_date, self.minigame_rewards_used = day, used
+        if ok:
+            self.save_data()
+        return ok
 
     def save_data(self, force_backup: bool = False) -> bool:
         with self._lock:
@@ -513,6 +532,8 @@ class AppState:
                 self.last_saved_at = data.get('last_saved_at')
                 self.tasks = data.get('tasks', [])
                 self.minigame_available = data.get('minigame_available', True)
+                self.minigame_rewards_date = data.get('minigame_rewards_date')
+                self.minigame_rewards_used = data.get('minigame_rewards_used', 0)
                 self.settings = data.get('settings', {})
                 # Set backing fields directly to avoid triggering save_data() during load
                 self._pet_stage = data.get('pet_stage', 1)
@@ -625,6 +646,8 @@ class AppState:
                 self.settings = {}
                 self.tasks = []
                 self.minigame_available = True
+                self.minigame_rewards_date = None
+                self.minigame_rewards_used = 0
 
                 self.study_session = {
                     'active': False, 'type': None, 'schedule': None, 'current_block': 0,

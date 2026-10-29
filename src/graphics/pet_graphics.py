@@ -69,7 +69,7 @@ class PetGraphics:
         }
 
         # All supported emotions (must match capitalised filename suffixes)
-        self.valid_emotions = {'Happy', 'Sad', 'Worried', 'Angry', 'Hungry'}
+        self.valid_emotions = {'Happy', 'Sad', 'Worried', 'Angry', 'Hungry', 'Mouth_Open'}
 
         # Default emotion if none specified
         self.default_emotion = 'Happy'  # Must match the case in filenames
@@ -170,6 +170,13 @@ class PetGraphics:
             return None
         
         # All image loading is now handled in the try-except block above
+
+    def get_pet_image_with_fallback(self, pet_type, stage, preferred_emotion, fallback_emotion, size):
+        """Return the image for preferred_emotion if that file exists, else for fallback_emotion."""
+        path = self._get_pet_image_path(str(pet_type).lower(), stage, preferred_emotion)
+        if path and os.path.exists(path):
+            return self.get_pet_image(pet_type, stage, preferred_emotion, size)
+        return self.get_pet_image(pet_type, stage, fallback_emotion, size)
     
     def _get_pet_image_path(self, pet_type: str, stage: int, emotion: str) -> Optional[str]:
         """
@@ -190,7 +197,10 @@ class PetGraphics:
         # Normalize inputs
         pet_type = str(pet_type).lower()
         stage = int(stage) if stage else 1
-        emotion = str(emotion).capitalize() if emotion and stage > 1 else None
+        if emotion and stage > 1:
+            emotion = "_".join(part.capitalize() for part in str(emotion).split("_"))
+        else:
+            emotion = None
 
         # Validate emotion against known set; fall back to Happy if unrecognised
         if emotion and emotion not in self.valid_emotions:

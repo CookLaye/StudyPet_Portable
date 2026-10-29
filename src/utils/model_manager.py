@@ -2,7 +2,7 @@
 ModelManager - downloads and runs the local llama.cpp server used by the StudyPet chatbot.
 
 Layout on disk (created on first run):
-    assets/models/gpt_pet/llama-3.2-1b-instruct-q4_k_m.gguf     <- the model
+    assets/models/gpt_pet/<selected_model>.gguf     <- the model
     assets/models/gpt_pet/bin/...                               <- llama.cpp release archive, extracted as-is
 
 The server binary is NEVER moved out of the folder the archive put it in: it needs the
@@ -10,6 +10,9 @@ DLLs / dylibs that sit next to it.
 """
 
 import os
+import json
+from datetime import datetime
+from src.utils import hardware_info
 import platform
 import signal
 import socket
@@ -24,9 +27,6 @@ from pathlib import Path
 # ---- Configuration ---------------------------------------------------------------
 LLAMA_RELEASE_TAG = "b9975"   # pinned on purpose: newer tags may rename assets or change flags
 RELEASE_BASE_URL = "https://github.com/ggml-org/llama.cpp/releases/download"
-MODEL_FILENAME = "llama-3.2-1b-instruct-q4_k_m.gguf"
-MODEL_URL = ("https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/"
-             "Llama-3.2-1B-Instruct-Q4_K_M.gguf")
 MIN_MODEL_BYTES = 300 * 1024 * 1024   # sanity floor; the real file is roughly 0.8 GB
 SERVER_PORT = 8080            # preferred port; if it is busy a free one is chosen automatically
 
@@ -78,20 +78,169 @@ def explain_exit_code(code):
 
 
 class ModelManager:
+    ai_unavailable = False
     """Manages the lifecycle of the local LLM server (standalone llama-server binary)."""
 
+
+    def load_catalog(self):
+        """Read model catalog from JSON; fallback to built-in if missing."""
+        builtin_catalog = {
+    "version": 1,
+    "tiers": [
+        {
+            "id": "lite",
+            "label": "Lite",
+            "min_ram_gb": 0,
+            "filename": "Qwen2.5-1.5B-Instruct-Q4_K_M.gguf",
+            "url": "https://huggingface.co/bartowski/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/Qwen2.5-1.5B-Instruct-Q4_K_M.gguf",
+            "approx_mb": 940,
+            "context": 4096,
+            "license": "Apache 2.0"
+        },
+        {
+            "id": "standard",
+            "label": "Standard",
+            "min_ram_gb": 6,
+            "filename": "Qwen2.5-3B-Instruct-Q4_K_M.gguf",
+            "url": "https://huggingface.co/bartowski/Qwen2.5-3B-Instruct-GGUF/resolve/main/Qwen2.5-3B-Instruct-Q4_K_M.gguf",
+            "approx_mb": 1840,
+            "context": 4096,
+            "license": "Qwen Research License (non-commercial)"
+        },
+        {
+            "id": "plus",
+            "label": "Plus",
+            "min_ram_gb": 12,
+            "filename": "Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
+            "url": "https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/resolve/main/Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
+            "approx_mb": 2381,
+            "context": 4096,
+            "license": "Apache 2.0"
+        }
+    ],
+    "fallback_ram_gb": 8
+}
+        catalog_path = self.project_root / "src" / "data" / "model_catalog.json"
+        if catalog_path.exists():
+            try:
+                with open(catalog_path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception as e:
+                print(f"Warning: Failed to load catalog: {e}")
+        return builtin_catalog
+
+    def choose_tier(self, catalog):
+        """Choose model tier based on RAM or environment variable."""
+        env_tier = os.environ.get("STUDYPET_MODEL_TIER")
+        if env_tier:
+            for tier in catalog["tiers"]:
+                if tier["id"] == env_tier:
+                    return tier
+        ram = hardware_info.get_total_ram_gb()
+        if ram is None:
+            ram = catalog.get("fallback_ram_gb", 8)
+        best_tier = catalog["tiers"][0]
+        for tier in catalog["tiers"]:
+            if tier["min_ram_gb"] <= ram:
+                if tier["min_ram_gb"] > best_tier["min_ram_gb"]:
+                    best_tier = tier
+        return best_tier
+
+    def _save_selected_model(self, tier):
+        """Persist chosen model to selected_model.json."""
+        selection_path = self.model_dir / "selected_model.json"
+        data = {
+            "tier": tier["id"],
+            "filename": tier["filename"],
+            "url": tier["url"],
+            "context": tier["context"],
+            "chosen_at": datetime.now().isoformat(),
+            "machine": hardware_info.describe_machine()
+        }
+        with open(selection_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+
+
+    def wait_until_ready(self, timeout, abort=None):
+        """Poll is_server_running until True, timeout, or abort() is True."""
+        start = time.time()
+        while time.time() - start < timeout:
+            if self.is_server_running():
+                return True
+            if abort and abort():
+                return False
+            time.sleep(0.5)
+        return False
     def __init__(self, project_root=None):
         self.project_root = Path(project_root) if project_root else Path(__file__).parent.parent.parent
         self.model_dir = self.project_root / "assets" / "models" / "gpt_pet"
         self.bin_dir = self.model_dir / "bin"
-        self.model_path = self.model_dir / MODEL_FILENAME
         self.pid_file = self.model_dir / "server.pid"
         self.server_process = None
         self.log_file = None
-
+        
         self.model_dir.mkdir(parents=True, exist_ok=True)
         self.bin_dir.mkdir(parents=True, exist_ok=True)
-
+        
+        # Model selection
+        catalog = self.load_catalog()
+        env_tier_id = os.environ.get("STUDYPET_MODEL_TIER")
+        tier = None
+        if env_tier_id:
+            # Env var wins: check if it is a valid tier in the catalog
+            for t in catalog["tiers"]:
+                if t["id"] == env_tier_id:
+                    tier = t
+                    break
+        
+        if tier is None:
+            # No valid env var, try saved selection
+            selection_path = self.model_dir / "selected_model.json"
+            if selection_path.exists():
+                try:
+                    with open(selection_path, "r", encoding="utf-8") as f:
+                        sel = json.load(f)
+                    if (self.model_dir / sel["filename"]).is_file():
+                        # Check if the saved tier is still in the catalog
+                        for t in catalog["tiers"]:
+                            if t["id"] == sel["tier"]:
+                                tier = t
+                                break
+                    else:
+                        raise FileNotFoundError()
+                except Exception:
+                    selection_path.unlink(missing_ok=True)
+        
+        if tier is None:
+            # Final fallback: auto-choose based on RAM
+            tier = self.choose_tier(catalog)
+        
+        # Save the chosen tier if it differs from what is saved (or if nothing was saved)
+        # This ensures the env var override is persisted.
+        # Save the chosen tier if it differs from what is saved
+        selection_path = self.model_dir / "selected_model.json"
+        should_save = True
+        if selection_path.exists():
+            try:
+                with open(selection_path, "r", encoding="utf-8") as f:
+                    sel = json.load(f)
+                if (sel.get("tier") == tier["id"] and
+                    sel.get("filename") == tier["filename"] and
+                    sel.get("url") == tier["url"] and
+                    sel.get("context") == tier["context"]):
+                    should_save = False
+            except Exception:
+                pass
+        if should_save:
+            self._save_selected_model(tier)
+        
+        
+        self.model_path = self.model_dir / tier["filename"]
+        self.model_url = tier["url"]
+        self.context_size = tier["context"]
+        self.selected_tier_id = tier["id"]
+        
+        
         self._reap_stale_server()
         # Callers (e.g. the chat client) must read `self.port` instead of hard-coding 8080.
         self.port = self._pick_port(SERVER_PORT)
@@ -275,24 +424,36 @@ class ModelManager:
 
         raise RuntimeError(f"Download failed: {url} ({type(last_error).__name__}: {last_error})")
 
+    def _note_unused_models(self):
+        """Print unused GGUF files in the model directory."""
+        for f in self.model_dir.glob("*.gguf"):
+            if f.name != self.model_path.name:
+                size_mb = f.stat().st_size / (1024 * 1024)
+                print(f"Unused model file: {f.name} ({size_mb:.1f} MB) - no longer used, can be deleted to save space.")
+        
     def setup_model(self):
         """Ensure the GGUF model exists and is complete. Re-downloads a broken/partial file."""
         if self.is_valid_model(self.model_path):
             print("Model file already exists.")
+            self._note_unused_models()
             return self.model_path
-
+        
         if self.model_path.exists():
             print("Existing model file looks incomplete/corrupt - downloading it again.")
             self.model_path.unlink()
-
-        print("Downloading Llama 3.2 1B GGUF model (approx 0.8 GB, first run only)...")
-        self._download_file(MODEL_URL, self.model_path)
+        
+        # Model download message is now handled dynamically
+        from src.utils import hardware_info
+        catalog = self.load_catalog()
+        tier = next((t for t in catalog["tiers"] if t["id"] == getattr(self, "selected_tier_id", "lite")), catalog["tiers"][0])
+        print(f"Detected: {hardware_info.describe_machine()} -> using tier {tier['id']} ({tier['label']}, ~{tier['approx_mb']} MB)")
+        self._download_file(self.model_url, self.model_path)
         if not self.is_valid_model(self.model_path):
             self.model_path.unlink(missing_ok=True)
             raise RuntimeError("Downloaded model failed validation (not a complete GGUF file).")
+        
+        self._note_unused_models()
         return self.model_path
-
-    # ---- backend (llama-server) --------------------------------------------------
     def _backend_urls(self):
         """Candidate download URLs for this OS/CPU, in order of preference."""
         system = platform.system()
@@ -390,7 +551,8 @@ class ModelManager:
         cmd = [
             str(server_exe),
             "-m", str(self.model_path),
-            "-c", "2048",
+            "-c", "4096",
+            "-np", "1",
             "--host", "127.0.0.1",
             "--port", str(self.port),
         ]
@@ -416,7 +578,7 @@ class ModelManager:
             self.pid_file.write_text(f"{self.server_process.pid} {os.getpid()}")
 
             print("Waiting for AI server to initialize", end="", flush=True)
-            timeout = 60
+            timeout = 180
             start_time = time.time()
             while time.time() - start_time < timeout:
                 if self.server_process.poll() is not None:

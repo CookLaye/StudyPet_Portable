@@ -14,12 +14,13 @@ quiz (the caller passes a fresh StressDiagnosisState each time).
 import tkinter as tk
 
 from utils.stress_diagnosis import render_result_panel
-from screens.stress_panels import ScanPanel, QuizPanel
+from screens.stress_panels import ScanPanel, QuizPanel, EmotionScalePanel, READOUT_RESERVE_PX, SHOW_MODEL_READOUT
+from utils.weekly_checkin import ensure_anchor, is_dass_due, mark_dass_completed
 
 
 class DiagnosisWizard:
     def __init__(self, parent, colors, s, stress_state, current_pet,
-                 on_complete=None, on_result=None, pet_graphics=None):
+                 on_complete=None, on_result=None, pet_graphics=None, app_state=None):
         """
         Args:
             parent: root window.   colors / s: theme colours and scaling function.
@@ -36,6 +37,12 @@ class DiagnosisWizard:
         self.on_complete = on_complete
         self.on_result = on_result
         self.pet_graphics = pet_graphics
+        self.app_state = app_state
+
+        if self.app_state:
+            settings = getattr(self.app_state, "settings", None)
+            set_fn = getattr(self.app_state, "set_setting", None)
+            ensure_anchor(settings, set_fn)
         self._panel = None
         self._closed = False
 
@@ -58,7 +65,8 @@ class DiagnosisWizard:
         self.content_frame.pack(fill="both", expand=True, padx=self.s(20), pady=self.s(20))
 
         # preview scaled so scan panel (title + preview + status + bar) fits the window height
-        avail = win_h - self.s(40) - self.s(190)
+        reserve = READOUT_RESERVE_PX if SHOW_MODEL_READOUT else 0
+        avail = win_h - self.s(40) - self.s(190 + reserve)
         self._preview_scale = max(0.5, min(1.0, avail / 480.0))
         self._start_scan()
 
@@ -88,15 +96,35 @@ class DiagnosisWizard:
     def _start_quiz(self):
         if not self._alive():
             return
-        self._swap_panel(lambda: QuizPanel(
-            self.content_frame, self.colors, self.s, on_submit=self._quiz_done,
-            title="Step 2 of 2 — Quick Check-in"))
+        
+        settings = getattr(self.app_state, "settings", None) if self.app_state else None
+        set_fn = getattr(self.app_state, "set_setting", None) if self.app_state else None
+        use_dass = True if settings is None else is_dass_due(settings)
+        
+        if use_dass:
+            self._swap_panel(lambda: QuizPanel(
+                self.content_frame, self.colors, self.s, on_submit=self._quiz_done,
+                title="Step 2 of 2 — Quick Check-in"))
+        else:
+            self._swap_panel(lambda: EmotionScalePanel(
+                self.content_frame, self.colors, self.s, self.current_pet, self.pet_graphics or pet_graphics,
+                on_submit=self._emotion_done, title="Step 2 of 2 — How are you feeling?",
+                face_px=130))
 
     def _quiz_done(self, score):
         self.stress_state.quiz_score = score
+        settings = getattr(self.app_state, "settings", None) if self.app_state else None
+        set_fn = getattr(self.app_state, "set_setting", None) if self.app_state else None
+        try:
+            if set_fn: mark_dass_completed(settings, set_fn, score=score)
+        except Exception: pass
         self.window.after(50, self._show_result)
 
     # ---------------------------------------------------------------- step 3: result
+
+    def _emotion_done(self, score):
+        self.stress_state.emotion_score = score
+        self.window.after(50, self._show_result)
     def _show_result(self):
         if not self._alive():
             return

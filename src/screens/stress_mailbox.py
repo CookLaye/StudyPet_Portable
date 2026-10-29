@@ -9,15 +9,16 @@ The score of this window is independent: it only contains the letter's keyword s
 (the caller passes a fresh StressDiagnosisState each time).
 """
 
+import threading
 import tkinter as tk
 
-from utils.stress_diagnosis import analyze_mailbox, render_result_panel
+from utils.stress_diagnosis import analyze_mailbox, analyze_mailbox_ai, render_result_panel
 from screens.stress_panels import LetterPanel
 
 
 class StressMailboxWindow:
     def __init__(self, parent, colors, s, stress_state, current_pet, pet_graphics,
-                 on_result=None):
+                 on_result=None, model_manager=None):
         """
         Args:
             parent: root window.   colors / s: theme colours and scaling function.
@@ -32,6 +33,7 @@ class StressMailboxWindow:
         self.current_pet = current_pet
         self.pet_graphics = pet_graphics
         self.on_result = on_result
+        self.model_manager = model_manager
         self._panel = None
 
         self.window = tk.Toplevel(parent)
@@ -39,8 +41,8 @@ class StressMailboxWindow:
 
         parent_w = parent.winfo_width()
         parent_h = parent.winfo_height()
-        win_w = max(self.s(700), int(parent_w * 0.6))
-        win_h = max(self.s(480), int(parent_h * 0.6))
+        win_w = max(self.s(820), int(parent_w * 0.72))
+        win_h = max(self.s(560), int(parent_h * 0.75))
         screen_w = parent.winfo_screenwidth()
         screen_h = parent.winfo_screenheight()
         x = (screen_w - win_w) // 2
@@ -60,13 +62,55 @@ class StressMailboxWindow:
             self.pet_graphics, on_done=self._letter_done)
 
     # ---------------------------------------------------------------- result
+    def _alive(self):
+        try:
+            return bool(self.window.winfo_exists())
+        except Exception:
+            return False
+
     def _letter_done(self, letter_text):
-        (self.stress_state.mailbox_score,
-         self.stress_state.mailbox_crisis) = analyze_mailbox(letter_text)
-        self._panel.remove_status()
+        # Keyword score first (instant). If the local AI is available it refines the score in the background;
+        # the "Thinking it over..." status of the panel stays visible meanwhile.
+        kw_score, kw_crisis = analyze_mailbox(letter_text)
+        if self.model_manager is None:
+            self._show_letter_result(kw_score, kw_crisis)
+            return
+
+        outcome = {"done": False}
+
+        def apply(score, crisis, info=None):
+            if outcome["done"]:
+                return                                   # first one wins (AI result or the 60 s fallback)
+            outcome["done"] = True
+            if info:
+                print(f"[Mailbox] ai={info.get('used_ai')} kw={info.get('keyword_score')} "
+                      f"ai_score={info.get('ai_score')} final={score} ({info.get('seconds')}s) "
+                      f"reason={info.get('reason')}")
+            if self._alive():
+                self._show_letter_result(score, crisis)
+
+        def worker():
+            try:
+                score, crisis, info = analyze_mailbox_ai(letter_text, self.model_manager)
+            except Exception as e:
+                print(f"[Mailbox] AI scoring failed: {type(e).__name__}")
+                return                                   # the 60 s fallback will use the keyword score
+            try:
+                self.window.after(0, lambda: apply(score, crisis, info))
+            except Exception:
+                pass
+
+        threading.Thread(target=worker, daemon=True).start()
+        self.window.after(60000, lambda: apply(kw_score, kw_crisis, None))
+
+    def _show_letter_result(self, score, crisis):
+        self.stress_state.mailbox_score = score
+        self.stress_state.mailbox_crisis = crisis
+        if self._panel is not None:
+            self._panel.remove_status()
 
         result_frame = tk.Frame(self.main_container, bg=self.colors["bg_main"])
-        result_frame.place(relx=0.5, rely=0.7, anchor="center", relwidth=0.8)
+        result_frame.place(relx=0.5, rely=0.60, anchor="n", relwidth=0.8)
         render_result_panel(
             result_frame, self.colors, self.s, self.stress_state,
             on_close=self._close,

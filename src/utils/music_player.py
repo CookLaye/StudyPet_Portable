@@ -28,6 +28,10 @@ SUPPORTED_FORMATS = ('.mp3', '.wav', '.ogg', '.m4a')
 BGM_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'bgm'))
 CACHE_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'user_data', 'music_analysis_cache.json'))
 DEFAULT_TRACK_RE = re.compile(r'^default_[123]$', re.IGNORECASE)
+DEFAULT_DISPLAY_NAMES = {
+    "default_1": "Alpha Waves: Focus",
+    "default_2": "Alpha Waves: Calm",
+}
 
 class MusicPlayer:
     """Music player for background study music."""
@@ -90,14 +94,15 @@ class MusicPlayer:
                     stem = os.path.splitext(filename)[0]
 
                     self.playlist.append({
-                        "name": stem,
+                        "name": DEFAULT_DISPLAY_NAMES.get(stem.lower(), stem),
                         "path": track_path,
                         "exists": True,
+                        "stem": stem,
                         "filename": filename,
                         "is_default": bool(DEFAULT_TRACK_RE.fullmatch(stem))
                     })
 
-        self.playlist.sort(key=lambda t: (not t['is_default'], t['name'].lower()))
+        self.playlist.sort(key=lambda t: (not t["is_default"], t["stem"].lower() if t["is_default"] else t["name"].lower()))
 
     def refresh_library(self):
         """Re-scans the BGM folder and updates analysis."""
